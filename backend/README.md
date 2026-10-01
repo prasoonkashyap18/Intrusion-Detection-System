@@ -68,8 +68,17 @@ Configuration is read from environment variables (see [.env.example](../.env.exa
 - **SQLite** is used for the MVP (via SQLAlchemy), at `backend/data/ai_ids.db` by default (configurable through `DATABASE_URL`).
 - The database file is created automatically on application startup — there is nothing to set up manually.
 - The database file is intentionally **not committed** to the repository (see `.gitignore`); only the `backend/data/` directory itself is tracked.
-- No application tables exist yet. This step only establishes the engine, session factory, and declarative base — detection-related tables (batches, results, model metadata) will be added in a later step.
 - **PostgreSQL** may be considered once the project evolves beyond the MVP; it is not currently configured or supported.
+
+### Entities
+
+Three dataset-independent ORM models exist (`backend/app/models/`):
+
+- **`DetectionBatch`** (`detection_batches`) — represents one uploaded processing job (filename, status, record counts, timestamps).
+- **`DetectionResult`** (`detection_results`) — represents one individual detection within a batch (predicted class, confidence, severity, optional flow-context fields, which model produced it).
+- **`ModelMetadata`** (`model_metadata`) — identifies a trained ML model used for inference (name, version, dataset reference, evaluation metrics). No records exist until an actual model is trained — metrics are never fabricated.
+
+The exact ML feature schema (beyond the optional source/destination/port/protocol context fields already present) will be defined once a specific dataset is selected in a later step; these models intentionally do not assume any particular dataset's columns.
 
 ## Running Tests
 
@@ -83,8 +92,8 @@ Database tests use an isolated in-memory SQLite database and never touch the rea
 
 ## Current Limitations
 
-- No detection, ML, or dashboard logic exists yet — only API/app foundation and database infrastructure.
-- No ORM models or tables exist yet.
+- No detection API, CSV upload, ML training/inference, or dashboard logic exists yet — only API/app foundation and database models.
+- No records exist in any table; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
 - Only one public endpoint (`/api/v1/health`) exists.

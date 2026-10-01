@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
@@ -25,6 +25,16 @@ _connect_args = (
 )
 
 engine = create_engine(settings.database_url, connect_args=_connect_args)
+
+if settings.database_url.startswith("sqlite"):
+    # SQLite does not enforce foreign keys unless explicitly enabled per
+    # connection; without this, batch_id/model_id FKs on DetectionResult
+    # would be silently unenforced.
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
@@ -45,9 +55,11 @@ def get_db() -> Session:
 def init_db() -> None:
     """Create all tables registered on Base's metadata.
 
-    Safe to call with zero models registered — it simply creates no
-    tables yet. Intended to be called once real models exist.
+    Imports app.models so its ORM classes are registered on Base before
+    create_all() runs. Does not insert any data.
     """
+    import app.models  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
 
 
