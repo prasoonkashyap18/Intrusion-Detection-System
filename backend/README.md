@@ -80,6 +80,16 @@ Three dataset-independent ORM models exist (`backend/app/models/`):
 
 The exact ML feature schema (beyond the optional source/destination/port/protocol context fields already present) will be defined once a specific dataset is selected in a later step; these models intentionally do not assume any particular dataset's columns.
 
+## API Schemas
+
+Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — what requests/responses look like at the HTTP boundary — and are kept **independent of the SQLAlchemy ORM models** (`backend/app/models/`). This separation means the API contract and the database schema can evolve independently.
+
+- `DetectionResultBase` / `DetectionResultResponse`, `DetectionBatchResponse`, `ModelMetadataResponse` — response schemas for the three entities above.
+- Input validation happens at this API boundary: `confidence` is validated to `0.0–1.0` by the schema itself (not just the database constraint), and `severity`/`status` only accept the same controlled values as the database (`low`/`medium`/`high`/`critical` and `pending`/`processing`/`completed`/`failed`, respectively).
+- Response schemas use Pydantic v2's `from_attributes=True` so they can be built directly from ORM objects without manual field-by-field conversion.
+- `ModelMetadataResponse` intentionally **omits `artifact_path`** — the internal filesystem/storage path for a saved model artifact is not exposed over the public API (see the docstring in `app/schemas/model.py` for the full rationale).
+- No API endpoints exist yet — these schemas are not wired into any route in this step.
+
 ## Running Tests
 
 From the repository root, with the backend virtual environment activated:
