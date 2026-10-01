@@ -47,6 +47,7 @@ data/processed/
 !data/README.md
 
 # ===== Database =====
+*.sqlite
 *.sqlite3
 *.db
 *.db-journal

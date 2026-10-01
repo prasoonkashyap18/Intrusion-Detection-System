@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.db.database import check_connection, init_db
 
 configure_logging(debug=settings.debug)
 logger = logging.getLogger("ai_ids")
@@ -25,6 +26,11 @@ logger = logging.getLogger("ai_ids")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("%s starting up (environment=%s)", settings.app_name, settings.environment)
+    init_db()
+    if check_connection():
+        logger.info("Database connectivity check succeeded (%s)", settings.database_url)
+    else:
+        logger.warning("Database connectivity check failed (%s)", settings.database_url)
     yield
     logger.info("%s shutting down", settings.app_name)
 

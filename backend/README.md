@@ -61,11 +61,30 @@ While the server is running:
 
 ## Configuration
 
-Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file.
+Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`, `DATABASE_URL`). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file.
+
+## Database
+
+- **SQLite** is used for the MVP (via SQLAlchemy), at `backend/data/ai_ids.db` by default (configurable through `DATABASE_URL`).
+- The database file is created automatically on application startup — there is nothing to set up manually.
+- The database file is intentionally **not committed** to the repository (see `.gitignore`); only the `backend/data/` directory itself is tracked.
+- No application tables exist yet. This step only establishes the engine, session factory, and declarative base — detection-related tables (batches, results, model metadata) will be added in a later step.
+- **PostgreSQL** may be considered once the project evolves beyond the MVP; it is not currently configured or supported.
+
+## Running Tests
+
+From the repository root, with the backend virtual environment activated:
+
+```bash
+python -m pytest tests/backend -v
+```
+
+Database tests use an isolated in-memory SQLite database and never touch the real development database file.
 
 ## Current Limitations
 
-- No database, ML model, or detection logic exists yet.
+- No detection, ML, or dashboard logic exists yet — only API/app foundation and database infrastructure.
+- No ORM models or tables exist yet.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Only one endpoint (`/api/v1/health`) exists.
+- Only one public endpoint (`/api/v1/health`) exists.

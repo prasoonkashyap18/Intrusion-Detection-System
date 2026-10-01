@@ -26,6 +26,7 @@ class Settings:
             os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
         )
     )
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/ai_ids.db")
 
 
 settings = Settings()
