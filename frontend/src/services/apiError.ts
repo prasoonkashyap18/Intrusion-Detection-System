@@ -18,12 +18,24 @@ export class ApiError extends Error {
   readonly code: ApiErrorCode
   /** HTTP status when the backend responded, otherwise null. */
   readonly status: number | null
+  /**
+   * The backend's own user-facing explanation (its `{ error, message }` body),
+   * when it sent one. Written for end users, unlike `message`, which describes
+   * the failure for developers and logs.
+   */
+  readonly detail: string | null
 
-  constructor(code: ApiErrorCode, message: string, status: number | null = null, options?: ErrorOptions) {
+  constructor(
+    code: ApiErrorCode,
+    message: string,
+    status: number | null = null,
+    options?: ErrorOptions & { detail?: string | null },
+  ) {
     super(message, options)
     this.name = 'ApiError'
     this.code = code
     this.status = status
+    this.detail = options?.detail ?? null
   }
 
   /** True when the request never produced a usable response from the backend. */

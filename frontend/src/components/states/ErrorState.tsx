@@ -1,4 +1,5 @@
 import { TriangleAlert } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Button } from '../ui/Button'
 import { StateBlock } from './StateBlock'
 
@@ -13,6 +14,8 @@ interface ErrorStateProps {
   /** Shown as a Retry button when provided. */
   onRetry?: () => void
   retryLabel?: string
+  /** Extra actions shown beside Retry, e.g. choosing a different file. */
+  actions?: ReactNode
   compact?: boolean
   className?: string
 }
@@ -22,6 +25,7 @@ export function ErrorState({
   message,
   onRetry,
   retryLabel = 'Retry',
+  actions,
   compact,
   className,
 }: ErrorStateProps) {
@@ -34,7 +38,14 @@ export function ErrorState({
       description={message}
       compact={compact}
       className={className}
-      action={onRetry && <Button onClick={onRetry}>{retryLabel}</Button>}
+      action={
+        (onRetry || actions) && (
+          <>
+            {onRetry && <Button onClick={onRetry}>{retryLabel}</Button>}
+            {actions}
+          </>
+        )
+      }
     />
   )
 }

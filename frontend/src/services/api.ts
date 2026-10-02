@@ -31,6 +31,21 @@ function isBodyInit(body: unknown): body is BodyInit {
   )
 }
 
+const MAX_DETAIL_LENGTH = 300
+
+/** Extracts the backend's `{ error, message }` explanation, ignoring any other body shape. */
+async function readErrorDetail(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json()
+    if (typeof body === 'object' && body !== null && 'message' in body && typeof body.message === 'string') {
+      return body.message.trim().slice(0, MAX_DETAIL_LENGTH) || null
+    }
+  } catch {
+    // Not JSON (e.g. a proxy error page); callers fall back to a generic message.
+  }
+  return null
+}
+
 /**
  * Single entry point for backend calls: resolves the base URL, applies a
  * timeout, parses JSON, validates the shape, and converts every failure into
@@ -73,7 +88,9 @@ export async function request<T>(path: string, options: RequestOptions<T>): Prom
   }
 
   if (!response.ok) {
-    throw new ApiError('http_error', `Request failed with status ${response.status}`, response.status)
+    throw new ApiError('http_error', `Request failed with status ${response.status}`, response.status, {
+      detail: await readErrorDetail(response),
+    })
   }
 
   let payload: unknown

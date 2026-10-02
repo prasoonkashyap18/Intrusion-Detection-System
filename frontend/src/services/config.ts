@@ -16,3 +16,13 @@ export const API_V1_PREFIX = '/api/v1'
 
 /** Requests fail with a `timeout` ApiError rather than hanging if the backend stops responding. */
 export const DEFAULT_TIMEOUT_MS = 8_000
+
+/**
+ * Largest CSV the UI will offer to upload. Mirrors the backend's default
+ * MAX_UPLOAD_MB (50). This is only for fast feedback — the backend enforces
+ * its own limit, which is the one that counts.
+ */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+/** Uploads send the whole file, so they get far longer than a health check. */
+export const UPLOAD_TIMEOUT_MS = 120_000

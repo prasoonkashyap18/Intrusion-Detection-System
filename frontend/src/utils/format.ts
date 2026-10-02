@@ -11,3 +11,29 @@ export function formatHost(url: string): string {
     return url
   }
 }
+
+/** Human-readable size using binary units, e.g. 2.4 MB. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB'] as const
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  const digits = value >= 100 || Number.isInteger(value) ? 0 : 1
+  return `${value.toFixed(digits)} ${units[unit]}`
+}
+
+/** Thousands-separated integer, e.g. 1,234. */
+export function formatCount(value: number): string {
+  return value.toLocaleString('en-US')
+}
+
+/** YYYY-MM-DD HH:mm:ss UTC from an ISO timestamp; returns the input unchanged if it is not a valid date. */
+export function formatUtcDateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return `${date.toISOString().slice(0, 10)} ${formatUtcTime(date)} UTC`
+}

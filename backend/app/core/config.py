@@ -27,6 +27,10 @@ class Settings:
         )
     )
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/ai_ids.db")
+    # Uploaded CSVs are stored on the local filesystem (relative to the working
+    # directory, like DATABASE_URL). Contents never go into SQLite.
+    upload_dir: str = os.getenv("UPLOAD_DIR", "./data/uploads")
+    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "50"))
 
 
 settings = Settings()

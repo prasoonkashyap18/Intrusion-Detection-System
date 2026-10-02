@@ -46,6 +46,10 @@ data/processed/
 !models/README.md
 !data/README.md
 
+# ===== Uploaded network-traffic CSVs (untrusted user data, never committed) =====
+backend/data/uploads/
+*.csv.part
+
 # ===== Database =====
 *.sqlite
 *.sqlite3

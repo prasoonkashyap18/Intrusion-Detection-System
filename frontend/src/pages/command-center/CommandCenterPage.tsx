@@ -2,14 +2,17 @@ import { Activity, Gauge, ShieldAlert, Siren } from 'lucide-react'
 import { TopologyViewport } from '../../components/topology/TopologyViewport'
 import { StatusDot } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
+import { useRegisteredBatches } from '../../hooks/useRegisteredBatches'
+import { formatCount } from '../../utils/format'
 import { DetectionBatchesPanel } from './DetectionBatchesPanel'
 import { DetectionPipelinePanel } from './DetectionPipelinePanel'
 import { SeverityScalePanel } from './SeverityScalePanel'
 import { SystemStatusPanel } from './SystemStatusPanel'
 import { TelemetryCard, type TelemetryMetric } from './TelemetryCard'
+import { UploadPanel } from './UploadPanel'
 
 const TELEMETRY_METRICS: TelemetryMetric[] = [
-  { id: 'flows', label: 'Flows analyzed', icon: Activity, emptyNote: 'Awaiting first upload' },
+  { id: 'flows', label: 'Flows analyzed', icon: Activity, emptyNote: 'No batch has been analyzed yet' },
   { id: 'threats', label: 'Threats detected', icon: ShieldAlert, emptyNote: 'Awaiting detection results' },
   {
     id: 'critical',
@@ -22,6 +25,9 @@ const TELEMETRY_METRICS: TelemetryMetric[] = [
 ]
 
 export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
+  const { batches, add } = useRegisteredBatches()
+  const registeredRecords = batches.reduce((total, batch) => total + batch.total_records, 0)
+
   return (
     <div className="mx-auto w-full max-w-[1480px] px-5 pt-10 pb-20 md:px-8 lg:px-12 lg:pt-14">
       <header className="max-w-3xl">
@@ -38,12 +44,18 @@ export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
         </p>
         <p className="mt-6 flex items-start gap-2.5 text-sm text-graphite-500">
           <StatusDot tone="ice" className="mt-1.5" />
-          No network-flow data has been ingested yet. Panels show structural placeholders until real detection
-          results exist.
+          {batches.length === 0
+            ? 'No network-flow data has been ingested yet. Panels show structural placeholders until real detection results exist.'
+            : `${formatCount(batches.length)} ${batches.length === 1 ? 'batch' : 'batches'} registered this session (${formatCount(registeredRecords)} records). The traffic has not been analyzed yet — detection results will appear once processing exists.`}
         </p>
       </header>
 
       <TopologyViewport className="mt-10 lg:mt-12" />
+
+      <div className="mt-14 grid grid-cols-1 gap-5 lg:mt-16 xl:grid-cols-12">
+        <UploadPanel onUploaded={add} className="xl:col-span-5" />
+        <DetectionBatchesPanel apiHealth={apiHealth} batches={batches} className="xl:col-span-7" />
+      </div>
 
       <section aria-labelledby="telemetry-heading" className="mt-14 lg:mt-16">
         <div className="max-w-xl">
@@ -61,9 +73,8 @@ export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
 
       <div className="mt-14 grid grid-cols-1 gap-5 lg:mt-16 xl:grid-cols-12">
         <DetectionPipelinePanel className="xl:col-span-8" />
-        <SystemStatusPanel apiHealth={apiHealth} className="xl:col-span-4" />
-        <DetectionBatchesPanel apiHealth={apiHealth} className="xl:col-span-8" />
-        <SeverityScalePanel className="xl:col-span-4" />
+        <SystemStatusPanel apiHealth={apiHealth} className="xl:col-span-4 xl:row-span-2" />
+        <SeverityScalePanel className="xl:col-span-8" />
       </div>
     </div>
   )

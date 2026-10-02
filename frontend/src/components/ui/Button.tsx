@@ -2,13 +2,14 @@ import { useRef, type ComponentPropsWithoutRef } from 'react'
 import { useMagnetic } from '../../hooks/useMagnetic'
 import { cn } from '../../utils/cn'
 
-type ButtonVariant = 'secondary' | 'ghost'
-type ButtonSize = 'sm' | 'icon'
+type ButtonVariant = 'primary' | 'secondary' | 'ghost'
+type ButtonSize = 'sm' | 'md' | 'icon'
 
 const BASE =
   'inline-flex shrink-0 items-center justify-center font-medium transition-[color,background-color,box-shadow] duration-150 ease-out active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50'
 
 const VARIANTS: Record<ButtonVariant, string> = {
+  primary: 'bg-graphite-900 text-white shadow-control hover:bg-graphite-800 active:bg-graphite-950',
   secondary:
     'bg-white text-graphite-800 shadow-control ring-1 ring-graphite-900/8 hover:text-graphite-950 hover:ring-graphite-900/15 active:bg-graphite-50',
   ghost: 'text-graphite-600 hover:bg-graphite-900/5 hover:text-graphite-950 active:bg-graphite-900/8',
@@ -16,6 +17,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
 
 const SIZES: Record<ButtonSize, string> = {
   sm: 'h-8 gap-1.5 rounded-lg px-3 text-xs',
+  md: 'h-10 gap-2 rounded-[10px] px-4 text-sm',
   icon: 'size-8 rounded-lg',
 }
 

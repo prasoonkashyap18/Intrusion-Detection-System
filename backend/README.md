@@ -1,6 +1,6 @@
 # Backend
 
-The FastAPI backend for AI-IDS. This is the MVP foundation only — it currently exposes a health check endpoint and nothing else. Detection, ML inference, database access, and dashboard endpoints are not implemented yet; see [ARCHITECTURE.md](../ARCHITECTURE.md) for the planned design.
+The FastAPI backend for AI-IDS. It currently exposes a health check and a CSV upload endpoint that registers a pending detection batch. ML inference, detection results, and dashboard endpoints are not implemented yet; see [ARCHITECTURE.md](../ARCHITECTURE.md) for the planned design.
 
 ## Technology Used
 
@@ -61,7 +61,7 @@ While the server is running:
 
 ## Configuration
 
-Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`, `DATABASE_URL`). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file.
+Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`, `DATABASE_URL`, `UPLOAD_DIR`, `MAX_UPLOAD_MB`). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file.
 
 ## Database
 
@@ -79,6 +79,56 @@ Three dataset-independent ORM models exist (`backend/app/models/`):
 - **`ModelMetadata`** (`model_metadata`) — identifies a trained ML model used for inference (name, version, dataset reference, evaluation metrics). No records exist until an actual model is trained — metrics are never fabricated.
 
 The exact ML feature schema (beyond the optional source/destination/port/protocol context fields already present) will be defined once a specific dataset is selected in a later step; these models intentionally do not assume any particular dataset's columns.
+
+## CSV Upload
+
+```
+POST /api/v1/detection/upload        (multipart/form-data, field: file)
+```
+
+Registers an uploaded network-flow CSV as a **pending** detection batch. **The traffic is not analyzed**: no model runs, no `DetectionResult` rows are created, and the batch keeps `processed_records = 0` and `failed_records = 0` until a later processing step exists.
+
+**Response (`201`)**
+```json
+{
+  "batch_id": "3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30",
+  "filename": "traffic.csv",
+  "status": "pending",
+  "total_records": 1234,
+  "processed_records": 0,
+  "failed_records": 0,
+  "created_at": "2026-10-03T08:15:30Z"
+}
+```
+
+**Validation** (the frontend repeats the cheap checks for fast feedback, but only these count):
+
+| Rule | Failure |
+|---|---|
+| A `file` field with a filename is present | `400 missing_file` / `missing_filename` |
+| Extension is `.csv` (case-insensitive) | `415 unsupported_media_type` |
+| Content type, if sent, is not clearly something else (CSV, `text/plain`, `application/vnd.ms-excel` and `application/octet-stream` are accepted) | `415 unsupported_media_type` |
+| File is not larger than the limit — **50 MB** by default, set with `MAX_UPLOAD_MB` | `413 file_too_large` |
+| File is not empty | `400 empty_file` |
+| Valid comma-delimited text: a header with at least 2 columns, no NUL bytes, well-formed quoting, and every row has the header's column count (blank lines are ignored) | `400 invalid_csv` |
+| At least one data row | `400 no_data_rows` |
+| Registering fails (storage or database) | `500 upload_failed` |
+
+Errors always use `{"error": "<code>", "message": "<text>"}`, with messages safe to show users (no paths, SQL or stack traces). Any other malformed request returns `422 invalid_request`.
+
+No dataset-specific columns are required: "valid" means structurally valid. Dataset-specific feature validation belongs to the later data-processing step. UTF-8 (with or without a BOM) is read directly; other encodings fall back to Latin-1 because some public IDS datasets are not UTF-8. Rows are counted with Python's standard `csv` module (no pandas).
+
+**Storage and batch lifecycle**
+
+- The file is stored at `backend/data/uploads/<batch_id>.csv` (`UPLOAD_DIR`). The name is generated server-side from the batch's own UUID, so the client's filename never touches the filesystem and a later step can find a batch's file from its ID alone. Uploaded files are untrusted user data and are git-ignored.
+- The database stores only metadata (`DetectionBatch`): the sanitized display filename (directories and unsafe characters removed), `status = pending`, the data-row count, zeroed processed/failed counts, and the UTC creation time. The CSV is never stored in SQLite.
+- Registration is all-or-nothing: the upload is streamed to a `.part` file, validated, atomically renamed, and only then committed. If any step fails, the partial file is removed and no batch row is created, so a success response always means a stored file *and* a committed batch.
+- Uploading the same file twice creates two batches. No hashing or deduplication is done.
+
+**Limitations**
+- The size limit is enforced while the file is copied to disk, after the framework has received the request body. There is no streaming rejection of oversized bodies.
+- The upload is a synchronous request; very large files hold a worker thread while they are copied and scanned.
+- No authentication, rate limiting or virus scanning.
 
 ## API Schemas
 
@@ -98,12 +148,13 @@ From the repository root, with the backend virtual environment activated:
 python -m pytest tests/backend -v
 ```
 
-Database tests use an isolated in-memory SQLite database and never touch the real development database file.
+Database and upload tests use an isolated in-memory SQLite database and a temporary upload directory; they never touch the real development database or `backend/data/uploads/`.
 
 ## Current Limitations
 
-- No detection API, CSV upload, ML training/inference, or dashboard logic exists yet — only API/app foundation and database models.
-- No records exist in any table; nothing inserts sample or fake data.
+- No ML training/inference, detection results, or dashboard logic exists yet. Uploaded CSVs are registered as `pending` batches and are not analyzed.
+- Only batches created by real uploads exist; nothing inserts sample or fake data.
+- There is no endpoint to list or fetch stored batches yet.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Only one public endpoint (`/api/v1/health`) exists.
+- Two public endpoints exist: `GET /api/v1/health` and `POST /api/v1/detection/upload`.

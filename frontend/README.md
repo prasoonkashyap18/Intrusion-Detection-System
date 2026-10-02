@@ -78,11 +78,12 @@ UI component → hook (useApiHealth) → service (getHealth) → client (request
 | `services/api.ts` | `request()` / `getJson()` — URL resolution, methods, JSON encoding, timeout, validation |
 | `services/apiError.ts` | `ApiError` and its `code` union |
 | `services/health.ts` | `getHealth()` for `GET /api/v1/health` |
+| `services/detection.ts` | `uploadDetectionCsv()` for `POST /api/v1/detection/upload` |
 | `services/index.ts` | Barrel re-export — import from `@/services` or `../services` |
 
-`request()` supports GET/POST/PUT/PATCH/DELETE and JSON or `FormData` bodies, so later steps (CSV upload, detection results) add a service module rather than new transport code. Every response is narrowed by a type guard, so callers never receive unchecked data. All endpoints return JSON today; a no-content (204) endpoint would need explicit handling.
+`request()` supports GET/POST/PUT/PATCH/DELETE and JSON or `FormData` bodies, so a new endpoint adds a service module rather than new transport code (`services/detection.ts` is the CSV upload). Every response is narrowed by a type guard, so callers never receive unchecked data. All endpoints return JSON today; a no-content (204) endpoint would need explicit handling.
 
-**Only `GET /api/v1/health` exists on the backend, so it is the only service implemented.** No other endpoint is stubbed or faked.
+Two backend endpoints exist — `GET /api/v1/health` and `POST /api/v1/detection/upload` — and those are the only services implemented. No other endpoint is stubbed or faked.
 
 ### Error handling
 
@@ -103,6 +104,20 @@ Every failure leaves the service layer as an `ApiError` with a `code`, so raw `f
 `useApiHealth` owns the lifecycle and feeds the header badge and the Platform Status panel. It reports **Connecting** until the first response, then only what the backend actually returns — **Online** (`status: "healthy"`), **Degraded** (responded, different status), or **Offline** (unreachable or an error status). Nothing assumes a healthy backend.
 
 It re-checks every 30 s, pauses in background tabs, re-checks on tab focus, and the panel's **Re-check** button forces one. A 30-second interval keeps a backend that went down from showing stale state without polling aggressively.
+
+## CSV Upload
+
+The Command Center's **Traffic ingestion** panel uploads a network-flow CSV to `POST /api/v1/detection/upload`, which registers it as a **pending detection batch**. **The traffic is not analyzed** — no model exists yet — and the UI says so everywhere it shows a batch.
+
+```
+CsvUpload (component) → useCsvUpload (hook) → uploadDetectionCsv (service) → request() → FastAPI
+```
+
+- **Select or drop:** a "Choose file" button (keyboard- and screen-reader-reachable) and a drop zone scoped to the upload panel only. Drag feedback is a subtle cyan border.
+- **Client checks** (fast feedback only, never security): `.csv` extension, non-empty, at most 50 MB (`MAX_UPLOAD_BYTES`, mirroring the backend default). The backend validates everything again.
+- **Progress:** `fetch` cannot report upload progress, so the UI shows a truthful indeterminate "Uploading…" — never a percentage. The buttons are disabled and the hook ignores repeat submissions while a request is in flight.
+- **Result:** on success, the batch ID, filename, record count and `pending` status exactly as the backend returned them. On failure, the backend's own user-facing message (via `ApiError.detail`) or a plain-language fallback; **Retry** is offered only when resending could help (network errors, timeouts, 5xx), not for a file the server rejected.
+- **Batches panel:** `useRegisteredBatches` keeps the batches created in this session, so a new batch appears immediately without a reload. There is no list endpoint yet, so **batches from earlier sessions are stored in the database but not shown**, and the panel says so.
 
 ## UI State Components
 
@@ -196,10 +211,12 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 
 ## Current Limitations
 
-- No CSV upload, detection results, analytics or model-performance views exist yet; those navigation sections are marked **Planned**.
-- Telemetry, batch and pipeline panels are structural placeholders — they show no data because none exists.
+- Uploaded CSVs are registered but not analyzed. Detection results, analytics and model-performance views do not exist yet; those navigation sections are marked **Planned**.
+- The batches panel only shows batches registered in the current browser session (no list endpoint yet).
+- Upload progress is indeterminate, because `fetch` offers no upload progress events.
+- Telemetry and pipeline panels are structural placeholders — they show no data because no analysis has run.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.
 - No routing library yet (there is only one page).
-- Tests cover the service layer, the health hook and the state components; the topology renderer and page layouts are not covered yet.
-- `ErrorState` has no caller yet — no view fetches data that can fail beyond the health check, which surfaces as `OfflineState`. It ships tested, ready for the detection endpoints.
+- Tests cover the service layer, the hooks, the state and upload components, and the Command Center upload flow; the topology renderer is not covered.
+- `ErrorState` is used by the upload flow for failed uploads.
 - Backdrop click-to-close on the mobile drawer uses the native `closedby` dialog attribute; in browsers without support, Escape and the close button still work.
