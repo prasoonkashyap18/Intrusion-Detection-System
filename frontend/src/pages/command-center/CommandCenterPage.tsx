@@ -62,7 +62,7 @@ export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
       <div className="mt-14 grid grid-cols-1 gap-5 lg:mt-16 xl:grid-cols-12">
         <DetectionPipelinePanel className="xl:col-span-8" />
         <SystemStatusPanel apiHealth={apiHealth} className="xl:col-span-4" />
-        <DetectionBatchesPanel className="xl:col-span-8" />
+        <DetectionBatchesPanel apiHealth={apiHealth} className="xl:col-span-8" />
         <SeverityScalePanel className="xl:col-span-4" />
       </div>
     </div>

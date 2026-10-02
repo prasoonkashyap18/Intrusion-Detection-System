@@ -104,6 +104,21 @@ Every failure leaves the service layer as an `ApiError` with a `code`, so raw `f
 
 It re-checks every 30 s, pauses in background tabs, re-checks on tab focus, and the panel's **Re-check** button forces one. A 30-second interval keeps a backend that went down from showing stale state without polling aggressively.
 
+## UI State Components
+
+`src/components/states/` holds the reusable states every data-backed view needs. They are presentational: an optional `onRetry` callback is wired by the caller, so the components never know how the API works.
+
+| Component | Use |
+|---|---|
+| `LoadingState` | A request is in flight. Polite live region; static indicator under reduced motion |
+| `ErrorState` | A request failed. Takes a clean `message` — never raw exception text |
+| `EmptyState` | A request succeeded and genuinely returned nothing |
+| `OfflineState` | The backend is unreachable, so nothing could be asked |
+
+`EmptyState` and `OfflineState` are deliberately separate: *"there is nothing"* and *"we could not ask"* are different claims, and only the first says anything about the data. Each takes `compact` for tight spaces, and failures carry `role="alert"` with a text title so meaning never depends on colour.
+
+There is no success state. A successful request renders the real content, and no toast system exists because nothing needs one yet.
+
 ## Testing
 
 Vitest with jsdom and React Testing Library. Tests live in `frontend/tests/` — see [`tests/frontend/README.md`](../tests/frontend/README.md) for why they sit inside this package rather than beside the Python suites.
@@ -121,6 +136,7 @@ src/
 ├── components/
 │   ├── brand/          # Logo mark
 │   ├── navigation/     # Sidebar + navigation config
+│   ├── states/         # Loading / Error / Empty / Offline states
 │   ├── system/         # API status badge, UTC clock
 │   ├── topology/       # NetworkTopology3D, its Canvas engine, preview geometry, TopologyViewport panel
 │   └── ui/             # Design-system primitives (Panel, Button, StatusDot, SectionHeading, EmptyState, NoData)
@@ -184,5 +200,6 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 - Telemetry, batch and pipeline panels are structural placeholders — they show no data because none exists.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.
 - No routing library yet (there is only one page).
-- Tests cover the service layer and the health hook; components and the topology renderer are not covered yet.
+- Tests cover the service layer, the health hook and the state components; the topology renderer and page layouts are not covered yet.
+- `ErrorState` has no caller yet — no view fetches data that can fail beyond the health check, which surfaces as `OfflineState`. It ships tested, ready for the detection endpoints.
 - Backdrop click-to-close on the mobile drawer uses the native `closedby` dialog attribute; in browsers without support, Escape and the close button still work.
