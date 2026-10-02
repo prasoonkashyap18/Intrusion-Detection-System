@@ -6,7 +6,7 @@ import { Panel } from '../../components/ui/Panel'
 import { SectionHeading } from '../../components/ui/SectionHeading'
 import { StatusDot, type StatusTone } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
-import { API_BASE_URL } from '../../services/config'
+import { API_BASE_URL } from '../../services'
 import { cn } from '../../utils/cn'
 import { formatHost, formatUtcTime } from '../../utils/format'
 

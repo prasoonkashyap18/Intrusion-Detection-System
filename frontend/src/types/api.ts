@@ -1,5 +1,5 @@
 /** Response body of the backend's `GET /api/v1/health` endpoint. */
-export interface ApiHealthResponse {
+export interface HealthResponse {
   status: string
   service: string
 }

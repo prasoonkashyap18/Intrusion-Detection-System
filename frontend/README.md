@@ -12,7 +12,9 @@ The browser application for the AI-Based Network Intrusion Detection & Security 
 | Icons | lucide-react |
 | 3D topology | Custom Canvas 2D renderer (no 3D library dependency) |
 | Typography | Geist / Geist Mono (self-hosted via Fontsource — no third-party font requests) |
+| Backend calls | Native `fetch` behind a typed service layer (no HTTP library) |
 | Linting | oxlint (React, TypeScript and `jsx-a11y` accessibility rules) |
+| Testing | Vitest + jsdom + React Testing Library |
 
 ## Prerequisites
 
@@ -44,6 +46,8 @@ Open **http://localhost:5173**. The port is fixed (`strictPort`) because it is t
 | `npm run build` | Type-check (`tsc -b`) and build for production into `dist/` |
 | `npm run typecheck` | Type-check only |
 | `npm run lint` | Lint with oxlint (warnings fail the run) |
+| `npm test` | Run the Vitest suite once |
+| `npm run test:watch` | Run Vitest in watch mode |
 | `npm run preview` | Serve the production build locally (port 4173 — add `http://localhost:4173` to the backend's `CORS_ORIGINS` if the preview needs to reach the API) |
 
 ## Environment Configuration
@@ -55,6 +59,60 @@ Copy `.env.example` to `.env` (git-ignored) to override defaults:
 | `VITE_API_BASE_URL` | `http://localhost:8000` | Base URL of the FastAPI backend |
 
 **Every `VITE_*` variable is embedded in the JavaScript bundle and is visible to anyone using the app.** Never put API secrets, passwords, tokens, or database credentials in frontend environment variables.
+
+The base URL is read once, in `src/services/config.ts`. Nothing else in the app hard-codes a backend URL, so pointing the frontend at another backend is a single `.env` change.
+
+The backend must allow this app's origin. Its default `CORS_ORIGINS` already contains `http://localhost:5173`, which is why the dev server pins that port (`strictPort`).
+
+## API Service Layer
+
+All backend communication goes through `src/services/`, so no React component calls `fetch` directly:
+
+```
+UI component → hook (useApiHealth) → service (getHealth) → client (request) → FastAPI
+```
+
+| File | Responsibility |
+|---|---|
+| `services/config.ts` | Base URL from `VITE_API_BASE_URL`, `/api/v1` prefix, default timeout |
+| `services/api.ts` | `request()` / `getJson()` — URL resolution, methods, JSON encoding, timeout, validation |
+| `services/apiError.ts` | `ApiError` and its `code` union |
+| `services/health.ts` | `getHealth()` for `GET /api/v1/health` |
+| `services/index.ts` | Barrel re-export — import from `@/services` or `../services` |
+
+`request()` supports GET/POST/PUT/PATCH/DELETE and JSON or `FormData` bodies, so later steps (CSV upload, detection results) add a service module rather than new transport code. Every response is narrowed by a type guard, so callers never receive unchecked data. All endpoints return JSON today; a no-content (204) endpoint would need explicit handling.
+
+**Only `GET /api/v1/health` exists on the backend, so it is the only service implemented.** No other endpoint is stubbed or faked.
+
+### Error handling
+
+Every failure leaves the service layer as an `ApiError` with a `code`, so raw `fetch`/DOM exceptions never reach the UI:
+
+| `code` | Meaning |
+|---|---|
+| `http_error` | Backend responded with a non-2xx status (`status` is set) |
+| `network_error` | Backend unreachable — refused connection, DNS, CORS, offline |
+| `timeout` | No response within the timeout (5 s for health, 8 s default) |
+| `invalid_response` | Body was not JSON, or did not match the expected shape |
+| `aborted` | Caller cancelled, e.g. React effect cleanup — not a backend fault |
+
+`isUnreachable` groups `network_error` and `timeout`. A cancelled request never changes the displayed status.
+
+### Health check in the UI
+
+`useApiHealth` owns the lifecycle and feeds the header badge and the Platform Status panel. It reports **Connecting** until the first response, then only what the backend actually returns — **Online** (`status: "healthy"`), **Degraded** (responded, different status), or **Offline** (unreachable or an error status). Nothing assumes a healthy backend.
+
+It re-checks every 30 s, pauses in background tabs, re-checks on tab focus, and the panel's **Re-check** button forces one. A 30-second interval keeps a backend that went down from showing stale state without polling aggressively.
+
+## Testing
+
+Vitest with jsdom and React Testing Library. Tests live in `frontend/tests/` — see [`tests/frontend/README.md`](../tests/frontend/README.md) for why they sit inside this package rather than beside the Python suites.
+
+```bash
+npm test
+```
+
+`fetch` is stubbed in every test; no test contacts a real backend, and no fake detection data exists anywhere in the application.
 
 ## Project Structure
 
@@ -70,12 +128,16 @@ src/
 ├── layouts/            # AppShell, TopBar, MobileNavDrawer
 ├── pages/
 │   └── command-center/ # Command Center page and its panels
-├── services/           # API base config, typed fetch client, health service
+├── services/           # API client, error type, config, health service, barrel
 ├── types/              # Frontend types (API health, severity levels, topology graph)
 ├── utils/              # cn, color, formatting, shared pointer tracker
 ├── index.css           # Tailwind entry + design tokens
 └── main.tsx            # Application entry
+
+tests/                  # Vitest suites for the service layer and health hook
 ```
+
+`@/` is an alias for `src/`, available in both application and test code.
 
 ## Design System Direction
 
@@ -114,6 +176,7 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 - Application shell: responsive sidebar (full on desktop, icon rail on tablet, modal drawer on mobile), sticky header with breadcrumb, skip link, landmarks and keyboard focus styles.
 - Live backend connectivity: `GET /api/v1/health` is polled every 30 seconds (paused in background tabs). The header and Platform Status panel show the real result (Online / Connecting / Degraded / Offline), the measured round-trip time and the last check time in UTC.
 - Command Center: technical label → title → summary → 3D topology preview → security telemetry → pipeline, platform status, batches and severity scale — all with honest empty states.
+- A typed API service layer ready for the detection endpoints, with structured errors and request timeouts (see [API Service Layer](#api-service-layer)).
 
 ## Current Limitations
 
@@ -121,5 +184,5 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 - Telemetry, batch and pipeline panels are structural placeholders — they show no data because none exists.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.
 - No routing library yet (there is only one page).
-- No automated frontend tests yet.
+- Tests cover the service layer and the health hook; components and the topology renderer are not covered yet.
 - Backdrop click-to-close on the mobile drawer uses the native `closedby` dialog attribute; in browsers without support, Escape and the close button still work.

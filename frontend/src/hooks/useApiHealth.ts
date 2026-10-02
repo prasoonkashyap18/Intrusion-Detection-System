@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchApiHealth } from '../services/healthService'
+import { getHealth, isApiError } from '../services'
 import type { ApiConnectionStatus } from '../types/api'
 
+/**
+ * Light periodic re-check: the header badge and Platform Status panel should
+ * notice a backend that went down without the user reloading, but connectivity
+ * changes rarely, so this stays well clear of aggressive polling.
+ */
 const DEFAULT_POLL_INTERVAL_MS = 30_000
 
 export interface ApiHealthSnapshot {
@@ -21,7 +26,11 @@ const INITIAL_SNAPSHOT: ApiHealthSnapshot = {
   lastCheckedAt: null,
 }
 
-/** Polls the backend health endpoint and reports only what that endpoint actually returns. */
+/**
+ * Owns the health-check lifecycle for the UI: reports `connecting` until the
+ * first response, then only what the backend actually returns. Nothing here
+ * invents a healthy state.
+ */
 export function useApiHealth(pollIntervalMs = DEFAULT_POLL_INTERVAL_MS): ApiHealth {
   const [snapshot, setSnapshot] = useState<ApiHealthSnapshot>(INITIAL_SNAPSHOT)
   const runCheckRef = useRef<(() => void) | null>(null)
@@ -32,15 +41,16 @@ export function useApiHealth(pollIntervalMs = DEFAULT_POLL_INTERVAL_MS): ApiHeal
     const runCheck = async () => {
       const startedAt = performance.now()
       try {
-        const health = await fetchApiHealth(controller.signal)
+        const health = await getHealth(controller.signal)
         if (controller.signal.aborted) return
         setSnapshot({
           status: health.status === 'healthy' ? 'online' : 'degraded',
           latencyMs: Math.round(performance.now() - startedAt),
           lastCheckedAt: new Date(),
         })
-      } catch {
-        if (controller.signal.aborted) return
+      } catch (error) {
+        // A cancelled request says nothing about backend health.
+        if (controller.signal.aborted || (isApiError(error) && error.code === 'aborted')) return
         setSnapshot({ status: 'offline', latencyMs: null, lastCheckedAt: new Date() })
       }
     }
