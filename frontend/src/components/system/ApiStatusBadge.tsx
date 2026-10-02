@@ -8,15 +8,13 @@ export function ApiStatusBadge({ health }: { health: ApiHealth }) {
   return (
     <output
       aria-live="polite"
-      className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/3 px-3 py-1.5 text-xs font-medium text-ink-200"
+      className="inline-flex items-center gap-2 rounded-full bg-white/70 px-2.5 py-1 text-[13px] text-graphite-600 ring-1 ring-graphite-900/6"
     >
-      <StatusDot tone={presentation.tone} pulse={presentation.pulse} />
-      <span>
-        <span className="hidden sm:inline">API </span>
-        {presentation.label}
-      </span>
+      <span className="hidden text-graphite-500 sm:inline">API</span>
+      <StatusDot tone={presentation.tone} pulse={presentation.pulse} halo={health.status === 'online'} />
+      <span className="font-medium text-graphite-900">{presentation.label}</span>
       {health.status === 'online' && health.latencyMs !== null && (
-        <span className="hidden font-mono tabular-nums text-ink-500 sm:inline">{health.latencyMs} ms</span>
+        <span className="hidden font-mono text-xs tabular-nums text-graphite-500 sm:inline">{health.latencyMs} ms</span>
       )}
     </output>
   )

@@ -9,13 +9,17 @@ export function DetectionBatchesPanel({ className }: { className?: string }) {
     <Panel
       interaction="spotlight"
       aria-labelledby="detection-batches-heading"
-      className={cn('flex flex-col p-5', className)}
+      className={cn('flex flex-col p-6 lg:p-7', className)}
     >
-      <SectionHeading id="detection-batches-heading" eyebrow="Activity" title="Detection batches" />
+      <SectionHeading
+        id="detection-batches-heading"
+        title="Detection batches"
+        description="Each uploaded network-flow CSV is processed as a batch."
+      />
       <EmptyState
         icon={Inbox}
         title="No detection batches yet"
-        description="Each uploaded network-flow CSV will appear here as a batch with its processing status and results."
+        description="Batches will appear here with their processing status and results once a network-flow CSV has been uploaded."
         className="flex-1"
       />
     </Panel>

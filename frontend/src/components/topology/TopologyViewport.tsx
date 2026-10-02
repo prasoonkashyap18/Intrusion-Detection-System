@@ -1,101 +1,70 @@
-import { useRef, type ReactNode } from 'react'
-import { usePointerParallax } from '../../hooks/usePointerParallax'
 import { cn } from '../../utils/cn'
-import { NoData } from '../ui/NoData'
 import { Panel } from '../ui/Panel'
-import { SectionHeading } from '../ui/SectionHeading'
 import { StatusDot } from '../ui/StatusDot'
-import './topology.css'
+import { NetworkTopology3D, type NodeDescription } from './NetworkTopology3D'
+import { createPreviewTopology } from './previewTopology'
 
-interface TopologyViewportProps {
-  /**
-   * Scene content rendered inside the viewport frame (e.g. a lazily loaded
-   * WebGL topology). When omitted, the standby stage and empty state render.
-   */
-  children?: ReactNode
-  className?: string
-}
+const PREVIEW_TOPOLOGY = createPreviewTopology()
 
-export function TopologyViewport({ children, className }: TopologyViewportProps) {
+const describePreviewNode = (): NodeDescription => ({
+  title: 'Preview node',
+  detail: 'Illustrative geometry — no host data',
+})
+
+export function TopologyViewport({ className }: { className?: string }) {
   return (
-    <Panel
-      interaction="spotlight"
-      aria-labelledby="topology-heading"
-      className={cn('flex min-h-[380px] flex-col overflow-hidden lg:min-h-[460px]', className)}
-    >
-      <SectionHeading
-        id="topology-heading"
-        eyebrow="Network topology"
-        title="Topology view"
-        className="relative z-10 p-5"
-        action={
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-obsidian-900/60 px-2.5 py-1 font-mono text-micro uppercase tracking-label text-ink-400">
-            <StatusDot tone="muted" />
-            Standby
-          </span>
-        }
-      />
-      <div className="relative flex-1">{children ?? <StandbyStage />}</div>
+    <Panel interaction="spotlight" aria-labelledby="topology-heading" className={cn('overflow-hidden', className)}>
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 px-6 pt-6 lg:px-8 lg:pt-7">
+        <div className="max-w-xl">
+          <h2 id="topology-heading" className="text-lg font-semibold tracking-tight text-graphite-950">
+            Network topology
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-graphite-500">
+            Hosts and flows will be rendered from processed detection results. Until then this view shows
+            illustrative preview geometry — it does not represent any network.
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-2 rounded-full bg-ice-50 px-3 py-1 text-xs font-medium text-graphite-700 ring-1 ring-ice-200">
+          <StatusDot tone="ice" />
+          Preview geometry · not live data
+        </span>
+      </div>
+
+      <div className="topology-atmosphere relative mt-5 h-[360px] border-t border-graphite-900/5 md:h-[440px] lg:h-[500px]">
+        <NetworkTopology3D
+          graph={PREVIEW_TOPOLOGY}
+          label="Network topology preview showing illustrative geometry, not network data."
+          describeNode={describePreviewNode}
+          className="size-full"
+        />
+
+        <p className="pointer-events-none absolute top-4 left-5 hidden text-xs text-graphite-500 md:block lg:left-7">
+          Drag to rotate · Ctrl/⌘ + scroll to zoom · Click a node to focus
+        </p>
+
+        <ul
+          aria-label="Topology legend"
+          className="pointer-events-none absolute bottom-4 left-5 hidden max-w-[calc(100%-16rem)] flex-wrap items-center gap-x-5 gap-y-2 rounded-xl bg-white/80 px-3.5 py-2 text-xs text-graphite-600 shadow-control ring-1 ring-graphite-900/6 backdrop-blur-sm sm:flex lg:left-7"
+        >
+          <li className="flex items-center gap-2">
+            <span aria-hidden="true" className="size-2.5 rounded-full bg-radial-[at_35%_30%] from-graphite-400 to-graphite-950" />
+            Host
+          </li>
+          <li className="flex items-center gap-2">
+            <span aria-hidden="true" className="h-px w-4 bg-accent-500" />
+            Connection
+          </li>
+          <li className="flex items-center gap-2">
+            <span aria-hidden="true" className="flex gap-0.5">
+              <span className="size-1.5 rounded-full bg-sev-low" />
+              <span className="size-1.5 rounded-full bg-sev-medium" />
+              <span className="size-1.5 rounded-full bg-sev-high" />
+              <span className="size-1.5 rounded-full bg-sev-critical" />
+            </span>
+            Severity tint · real detections only
+          </li>
+        </ul>
+      </div>
     </Panel>
-  )
-}
-
-function StandbyStage() {
-  const sceneRef = useRef<HTMLDivElement>(null)
-  usePointerParallax(sceneRef)
-
-  return (
-    <>
-      <div aria-hidden="true" className="topology-stage">
-        <div ref={sceneRef} className="topology-scene">
-          <div className="topology-grid" />
-          <div className="topology-ring topology-ring-outer" />
-          <div className="topology-ring topology-ring-mid" />
-          <div className="topology-ring topology-ring-inner" />
-          <div className="topology-core" />
-          <div className="topology-beam" />
-        </div>
-      </div>
-
-      <HudCorners />
-
-      <div className="relative z-10 flex h-full flex-col justify-end p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="max-w-sm">
-            <p className="text-sm font-medium text-ink-100">No network-flow data ingested</p>
-            <p className="mt-1.5 text-xs leading-relaxed text-ink-400">
-              The interactive 3D topology will be generated from processed detection results. Nothing is
-              rendered from simulated traffic.
-            </p>
-          </div>
-          <dl className="flex gap-5 font-mono text-micro uppercase tracking-label">
-            <div className="flex gap-2">
-              <dt className="text-ink-500">Hosts</dt>
-              <dd className="text-ink-300">
-                <NoData />
-              </dd>
-            </div>
-            <div className="flex gap-2">
-              <dt className="text-ink-500">Flows</dt>
-              <dd className="text-ink-300">
-                <NoData />
-              </dd>
-            </div>
-          </dl>
-        </div>
-      </div>
-    </>
-  )
-}
-
-function HudCorners() {
-  const corner = 'absolute size-3.5 border-ice/30'
-  return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-3">
-      <span className={cn(corner, 'top-0 left-0 border-t border-l')} />
-      <span className={cn(corner, 'top-0 right-0 border-t border-r')} />
-      <span className={cn(corner, 'bottom-0 left-0 border-b border-l')} />
-      <span className={cn(corner, 'right-0 bottom-0 border-r border-b')} />
-    </div>
   )
 }

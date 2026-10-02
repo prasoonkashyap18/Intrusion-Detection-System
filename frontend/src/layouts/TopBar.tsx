@@ -17,8 +17,8 @@ export function TopBar({ activeNavId, apiHealth, isNavOpen, onOpenNav, menuButto
   const location = findNavLocation(activeNavId)
 
   return (
-    <header className="sticky top-0 z-30 border-b border-white/6 bg-obsidian-950/60 backdrop-blur-xl">
-      <div className="flex h-16 items-center gap-3 px-4 md:px-6 lg:px-8">
+    <header className="sticky top-0 z-30 border-b border-graphite-900/6 bg-canvas/75 backdrop-blur-md">
+      <div className="flex h-16 items-center gap-3 px-5 md:px-8 lg:px-12">
         <button
           ref={menuButtonRef}
           type="button"
@@ -26,7 +26,7 @@ export function TopBar({ activeNavId, apiHealth, isNavOpen, onOpenNav, menuButto
           aria-label="Open navigation"
           aria-expanded={isNavOpen}
           aria-controls="mobile-navigation"
-          className="-ml-1 grid size-9 place-items-center rounded-lg text-ink-300 transition-colors hover:bg-white/5 hover:text-ink-50 md:hidden"
+          className="-ml-1.5 grid size-9 place-items-center rounded-lg text-graphite-600 transition-colors hover:bg-graphite-900/5 hover:text-graphite-950 md:hidden"
         >
           <Menu className="size-5" aria-hidden="true" />
         </button>
@@ -34,12 +34,12 @@ export function TopBar({ activeNavId, apiHealth, isNavOpen, onOpenNav, menuButto
         {location && (
           <nav aria-label="Breadcrumb" className="min-w-0">
             <ol className="flex items-center gap-2 text-sm">
-              <li className="hidden text-ink-500 sm:block">{location.section.label}</li>
-              <li aria-hidden="true" className="hidden text-ink-600 sm:block">
+              <li className="hidden text-graphite-500 sm:block">{location.section.label}</li>
+              <li aria-hidden="true" className="hidden text-graphite-300 sm:block">
                 /
               </li>
               <li className="truncate">
-                <span aria-current="page" className="font-medium text-ink-100">
+                <span aria-current="page" className="font-medium text-graphite-950">
                   {location.item.label}
                 </span>
               </li>
@@ -47,9 +47,9 @@ export function TopBar({ activeNavId, apiHealth, isNavOpen, onOpenNav, menuButto
           </nav>
         )}
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex items-center gap-4">
           <ApiStatusBadge health={apiHealth} />
-          <span aria-hidden="true" className="hidden h-5 w-px bg-white/10 sm:block" />
+          <span aria-hidden="true" className="hidden h-4 w-px bg-graphite-900/10 sm:block" />
           <div className="hidden sm:block">
             <UtcClock />
           </div>

@@ -5,4 +5,4 @@ export interface ApiHealthResponse {
 }
 
 /** Frontend view of backend reachability, derived only from the health endpoint. */
-export type ApiConnectionStatus = 'checking' | 'online' | 'degraded' | 'offline'
+export type ApiConnectionStatus = 'connecting' | 'online' | 'degraded' | 'offline'

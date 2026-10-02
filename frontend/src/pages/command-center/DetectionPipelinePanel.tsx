@@ -23,43 +23,42 @@ const PIPELINE_STAGES: PipelineStage[] = [
 
 export function DetectionPipelinePanel({ className }: { className?: string }) {
   return (
-    <Panel interaction="spotlight" aria-labelledby="pipeline-heading" className={cn('p-5', className)}>
+    <Panel interaction="spotlight" aria-labelledby="pipeline-heading" className={cn('p-6 lg:p-7', className)}>
       <SectionHeading
         id="pipeline-heading"
-        eyebrow="Pipeline"
         title="Detection pipeline"
+        description="The stages every uploaded batch passes through."
         action={
-          <span className="inline-flex shrink-0 items-center gap-2 text-xs text-ink-400">
+          <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-graphite-500">
             <StatusDot tone="muted" />
             Not yet active
           </span>
         }
       />
 
-      <div className="relative mt-7">
+      <div className="relative mt-9">
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute top-5 right-[8.33%] left-[8.33%] hidden h-px bg-linear-to-r from-transparent via-white/15 to-transparent xl:block"
+          className="pointer-events-none absolute top-[46px] right-[8.33%] left-[8.33%] hidden h-px bg-linear-to-r from-transparent via-graphite-900/12 to-transparent xl:block"
         />
-        <ol className="relative grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 xl:grid-cols-6">
-          {PIPELINE_STAGES.map((stage) => {
+        <ol className="relative grid grid-cols-2 gap-x-4 gap-y-9 sm:grid-cols-3 xl:grid-cols-6">
+          {PIPELINE_STAGES.map((stage, index) => {
             const Icon = stage.icon
             return (
-              <li key={stage.id} className="group relative flex flex-col items-center text-center">
-                <span className="grid size-10 place-items-center rounded-xl border border-white/10 bg-obsidian-800 text-ink-400 transition-[color,border-color,box-shadow,translate] duration-300 ease-out-expo group-hover:-translate-y-0.5 group-hover:border-accent/40 group-hover:text-accent group-hover:shadow-glow">
-                  <Icon className="size-[18px]" strokeWidth={1.75} aria-hidden="true" />
+              <li key={stage.id} className="group flex flex-col items-center text-center">
+                <span aria-hidden="true" className="font-mono text-micro tabular-nums text-graphite-500">
+                  {String(index + 1).padStart(2, '0')}
                 </span>
-                <span className="mt-3 text-sm font-medium text-ink-200">{stage.name}</span>
-                <span className="mt-0.5 text-xs text-ink-500">{stage.detail}</span>
+                <span className="mt-2 grid size-11 place-items-center rounded-xl bg-white text-graphite-600 shadow-control ring-1 ring-graphite-900/8 transition-[translate,box-shadow,color] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:text-accent-600 group-hover:shadow-raised group-hover:ring-accent-500/35">
+                  <Icon className="size-[18px]" strokeWidth={1.6} aria-hidden="true" />
+                </span>
+                <span className="mt-3 text-sm font-medium text-graphite-900">{stage.name}</span>
+                <span className="mt-0.5 text-xs text-graphite-500">{stage.detail}</span>
               </li>
             )
           })}
         </ol>
       </div>
-
-      <p className="mt-6 border-t border-white/6 pt-3 text-xs text-ink-500">
-        Stage-level progress appears here while a batch is being processed.
-      </p>
     </Panel>
   )
 }

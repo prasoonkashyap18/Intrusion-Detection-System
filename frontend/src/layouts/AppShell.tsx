@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react'
-import { CursorLight } from '../components/interaction/CursorLight'
 import type { NavItemId } from '../components/navigation/navigation'
 import { Sidebar } from '../components/navigation/Sidebar'
 import type { ApiHealth } from '../hooks/useApiHealth'
@@ -31,17 +30,16 @@ export function AppShell({ activeNavId, apiHealth, children }: AppShellProps) {
     <div className="relative isolate min-h-dvh">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-lg focus:bg-obsidian-700 focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-ink-50"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-graphite-950 focus:shadow-raised"
       >
         Skip to main content
       </a>
-      <div aria-hidden="true" className="app-backdrop" />
-      <CursorLight />
+      <div aria-hidden="true" className="app-atmosphere" />
 
-      <div className="md:grid md:grid-cols-[76px_minmax(0,1fr)] lg:grid-cols-[288px_minmax(0,1fr)]">
+      <div className="md:grid md:grid-cols-[76px_minmax(0,1fr)] lg:grid-cols-[264px_minmax(0,1fr)]">
         <aside
           aria-label="Sidebar"
-          className="sticky top-0 z-40 hidden h-dvh border-r border-white/6 bg-obsidian-950/40 backdrop-blur-xl md:block"
+          className="sticky top-0 z-40 hidden h-dvh border-r border-graphite-900/6 bg-sidebar/85 backdrop-blur-sm md:block"
         >
           <Sidebar activeId={activeNavId} variant="docked" />
         </aside>

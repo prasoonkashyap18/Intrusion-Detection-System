@@ -1,17 +1,16 @@
 import { useNow } from '../../hooks/useNow'
-import { cn } from '../../utils/cn'
 import { formatUtcTime } from '../../utils/format'
 
-export function UtcClock({ className }: { className?: string }) {
+export function UtcClock() {
   const now = useNow()
 
   return (
     <time
       dateTime={now.toISOString()}
-      className={cn('inline-flex items-baseline gap-1.5 font-mono text-xs tabular-nums text-ink-300', className)}
+      className="inline-flex items-baseline gap-1.5 font-mono text-xs tabular-nums text-graphite-700"
     >
       {formatUtcTime(now)}
-      <span className="text-ink-500">UTC</span>
+      <span className="text-graphite-500">UTC</span>
     </time>
   )
 }

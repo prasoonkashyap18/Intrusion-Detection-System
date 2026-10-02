@@ -1,5 +1,6 @@
-import { Activity, Gauge, Info, ShieldAlert, Siren } from 'lucide-react'
+import { Activity, Gauge, ShieldAlert, Siren } from 'lucide-react'
 import { TopologyViewport } from '../../components/topology/TopologyViewport'
+import { StatusDot } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
 import { DetectionBatchesPanel } from './DetectionBatchesPanel'
 import { DetectionPipelinePanel } from './DetectionPipelinePanel'
@@ -22,54 +23,47 @@ const TELEMETRY_METRICS: TelemetryMetric[] = [
 
 export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 px-4 py-6 md:px-6 lg:gap-8 lg:px-8 lg:py-8">
+    <div className="mx-auto w-full max-w-[1480px] px-5 pt-10 pb-20 md:px-8 lg:px-12 lg:pt-14">
       <header className="max-w-3xl">
-        <p className="flex items-center gap-3 font-mono text-micro uppercase tracking-label text-accent before:h-px before:w-6 before:bg-accent/60">
-          Command Center
+        <p className="inline-flex items-center gap-2.5 font-mono text-micro uppercase tracking-label text-graphite-500">
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-accent-500" />
+          Operations · Command Center
         </p>
-        <h1 className="mt-3 text-[1.75rem] font-semibold tracking-tight text-ink-50 md:text-display">
+        <h1 className="mt-5 text-[2.125rem] leading-[1.08] font-semibold tracking-[-0.03em] text-graphite-950 md:text-display">
           Network security overview
         </h1>
-        <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-ink-300">
+        <p className="mt-5 max-w-xl text-base leading-relaxed text-graphite-600">
           Classify uploaded network-flow records with a machine-learning detection pipeline, then review
-          predictions, confidence and severity in one place.
+          predictions, confidence and severity from one place.
+        </p>
+        <p className="mt-6 flex items-start gap-2.5 text-sm text-graphite-500">
+          <StatusDot tone="ice" className="mt-1.5" />
+          No network-flow data has been ingested yet. Panels show structural placeholders until real detection
+          results exist.
         </p>
       </header>
 
-      <div
-        role="note"
-        className="flex items-start gap-3 rounded-xl border border-ice/15 bg-ice/4 px-4 py-3 text-sm leading-relaxed text-ink-300"
-      >
-        <Info className="mt-0.5 size-4 shrink-0 text-ice" aria-hidden="true" />
-        <p>
-          <span className="font-medium text-ink-100">No network-flow data has been ingested yet.</span> The
-          panels below are structural placeholders and will populate from real detection results once batches
-          are processed.
-        </p>
-      </div>
+      <TopologyViewport className="mt-10 lg:mt-12" />
 
-      <section aria-labelledby="telemetry-heading">
-        <h2 id="telemetry-heading" className="sr-only">
-          Detection telemetry
-        </h2>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-labelledby="telemetry-heading" className="mt-14 lg:mt-16">
+        <div className="max-w-xl">
+          <h2 id="telemetry-heading" className="text-lg font-semibold tracking-tight text-graphite-950">
+            Security telemetry
+          </h2>
+          <p className="mt-1.5 text-sm text-graphite-500">Values appear once detection results exist.</p>
+        </div>
+        <div className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
           {TELEMETRY_METRICS.map((metric) => (
             <TelemetryCard key={metric.id} metric={metric} />
           ))}
         </div>
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-12">
-        <TopologyViewport className="xl:col-span-8" />
-        <div className="flex flex-col gap-4 xl:col-span-4">
-          <SystemStatusPanel apiHealth={apiHealth} />
-          <DetectionBatchesPanel className="flex-1" />
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-12">
-        <DetectionPipelinePanel className="lg:col-span-7" />
-        <SeverityScalePanel className="lg:col-span-5" />
+      <div className="mt-14 grid grid-cols-1 gap-5 lg:mt-16 xl:grid-cols-12">
+        <DetectionPipelinePanel className="xl:col-span-8" />
+        <SystemStatusPanel apiHealth={apiHealth} className="xl:col-span-4" />
+        <DetectionBatchesPanel className="xl:col-span-8" />
+        <SeverityScalePanel className="xl:col-span-4" />
       </div>
     </div>
   )

@@ -16,7 +16,7 @@ export interface ApiHealth extends ApiHealthSnapshot {
 }
 
 const INITIAL_SNAPSHOT: ApiHealthSnapshot = {
-  status: 'checking',
+  status: 'connecting',
   latencyMs: null,
   lastCheckedAt: null,
 }
@@ -64,7 +64,7 @@ export function useApiHealth(pollIntervalMs = DEFAULT_POLL_INTERVAL_MS): ApiHeal
   }, [pollIntervalMs])
 
   const recheck = useCallback(() => {
-    setSnapshot((current) => ({ ...current, status: 'checking' }))
+    setSnapshot((current) => ({ ...current, status: 'connecting' }))
     runCheckRef.current?.()
   }, [])
 

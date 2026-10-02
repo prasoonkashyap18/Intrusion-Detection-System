@@ -2,7 +2,6 @@ import type { LucideIcon } from 'lucide-react'
 import { useId } from 'react'
 import { NoData } from '../../components/ui/NoData'
 import { Panel } from '../../components/ui/Panel'
-import { StatusDot } from '../../components/ui/StatusDot'
 import { cn } from '../../utils/cn'
 
 export interface TelemetryMetric {
@@ -20,26 +19,26 @@ export function TelemetryCard({ metric }: { metric: TelemetryMetric }) {
   const Icon = metric.icon
 
   return (
-    <Panel as="article" interaction="tilt" aria-labelledby={headingId} className="flex flex-col p-5">
-      <div className="flex items-center justify-between gap-3">
-        <h3 id={headingId} className="font-mono text-micro uppercase tracking-label text-ink-400">
-          {metric.label}
-        </h3>
-        <span className="grid size-8 place-items-center rounded-lg border border-white/8 bg-white/3">
+    <Panel as="article" interaction="tilt" aria-labelledby={headingId} className="flex flex-col p-6">
+      <div className="flex items-start justify-between gap-3">
+        <span className="grid size-10 place-items-center rounded-xl bg-linear-to-b from-white to-graphite-50 shadow-control ring-1 ring-graphite-900/7">
           <Icon
-            className={cn('size-4', metric.severity === 'critical' ? 'text-sev-critical/80' : 'text-ink-400')}
-            strokeWidth={1.75}
+            className={cn('size-[18px]', metric.severity === 'critical' ? 'text-sev-critical' : 'text-graphite-700')}
+            strokeWidth={1.6}
             aria-hidden="true"
           />
         </span>
+        <span className="rounded-full bg-graphite-50 px-2 py-0.5 text-[11px] font-medium text-graphite-500 ring-1 ring-graphite-900/5">
+          Awaiting data
+        </span>
       </div>
-      <p className="mt-7 font-mono text-telemetry font-medium text-ink-600">
+      <h3 id={headingId} className="mt-8 text-sm font-medium text-graphite-600">
+        {metric.label}
+      </h3>
+      <p className="mt-2 text-metric font-medium tabular-nums text-graphite-300">
         <NoData />
       </p>
-      <p className="mt-5 flex items-center gap-2 border-t border-white/6 pt-3 text-xs text-ink-500">
-        <StatusDot tone="muted" />
-        {metric.emptyNote}
-      </p>
+      <p className="mt-3 text-[13px] text-graphite-500">{metric.emptyNote}</p>
     </Panel>
   )
 }

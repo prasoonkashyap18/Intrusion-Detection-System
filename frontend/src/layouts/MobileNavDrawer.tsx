@@ -42,7 +42,7 @@ export function MobileNavDrawer({ activeNavId, onClose }: MobileNavDrawerProps) 
       ref={dialogRef}
       aria-label="Navigation"
       closedby="any"
-      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-72 max-w-[85vw] border-r border-white/8 bg-obsidian-900 p-0 text-ink-200 shadow-panel backdrop:bg-obsidian-950/70 backdrop:backdrop-blur-sm"
+      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-72 max-w-[85vw] border-r border-graphite-900/8 bg-sidebar p-0 text-graphite-800 shadow-raised backdrop:bg-graphite-950/20 backdrop:backdrop-blur-[2px]"
     >
       <Sidebar activeId={activeNavId} variant="drawer" onClose={closeDialog} />
     </dialog>

@@ -1,30 +1,21 @@
-import { useId } from 'react'
-
 export function LogoMark({ className }: { className?: string }) {
-  const gradientId = useId()
-
   return (
     <svg viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
-      <defs>
-        <linearGradient id={gradientId} x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
-          <stop style={{ stopColor: 'var(--color-accent)' }} />
-          <stop offset="1" style={{ stopColor: 'var(--color-ice)' }} />
-        </linearGradient>
-      </defs>
+      <rect width="32" height="32" rx="9" className="fill-graphite-900" />
       <path
-        d="M16 3.5 27 9.75v12.5L16 28.5 5 22.25V9.75L16 3.5Z"
-        stroke={`url(#${gradientId})`}
+        d="M16 5 25.5 10.5v11L16 27l-9.5-5.5v-11L16 5Z"
+        className="stroke-graphite-100"
+        strokeOpacity="0.9"
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
       <path
-        d="M16 10 21.25 13v6L16 22l-5.25-3v-6L16 10Z"
-        className="fill-accent/15"
-        stroke={`url(#${gradientId})`}
-        strokeWidth="1.25"
+        d="M16 10.75 20.5 13.375v5.25L16 21.25l-4.5-2.625v-5.25L16 10.75Z"
+        className="fill-accent-500/20 stroke-accent-400"
+        strokeWidth="1.2"
         strokeLinejoin="round"
       />
-      <circle cx="16" cy="16" r="2" className="fill-accent" />
+      <circle cx="16" cy="16" r="1.9" className="fill-accent-400" />
     </svg>
   )
 }

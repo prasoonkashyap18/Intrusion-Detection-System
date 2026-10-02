@@ -1,44 +1,60 @@
 @import "tailwindcss";
 
 /*
- * AI-IDS design tokens.
- * The default Tailwind palette is cleared so every color in the UI comes from
- * a named, semantic token below. `static` keeps all variables emitted so they
- * can also be used from custom CSS, SVG and inline styles via var().
+ * AI-IDS design tokens — premium light theme.
+ * Tailwind's default palette is cleared so every color comes from a named,
+ * semantic token. `static` keeps all variables emitted so canvas rendering,
+ * SVG and custom CSS can read them via var() / getComputedStyle.
  */
 @theme static {
   --color-*: initial;
   --color-white: #ffffff;
 
-  /* Obsidian surfaces: layered graphite, never pure black */
-  --color-obsidian-950: #06080b;
-  --color-obsidian-900: #090c11;
-  --color-obsidian-850: #0d1117;
-  --color-obsidian-800: #11161e;
-  --color-obsidian-700: #171d27;
-  --color-obsidian-600: #1f2733;
-  --color-obsidian-500: #2a3442;
+  /* Canvas & surfaces: sophisticated off-white, never a flat pure-white page */
+  --color-canvas: #f2f3f5;
+  --color-canvas-warm: #f6f5f1;
+  --color-sidebar: #f8f8f9;
+  --color-surface: #ffffff;
 
-  /* Ink: text and iconography (ink-500 and lighter meet WCAG AA on panels) */
-  --color-ink-50: #f3f6fa;
-  --color-ink-100: #e4ebf2;
-  --color-ink-200: #c7d1dc;
-  --color-ink-300: #a6b2c0;
-  --color-ink-400: #8a96a7;
-  --color-ink-500: #7a8699;
-  --color-ink-600: #566173;
+  /* Graphite: text, hairlines and 3D node material.
+     graphite-500 and darker meet WCAG AA for small text on canvas and surfaces. */
+  --color-graphite-50: #f4f5f7;
+  --color-graphite-100: #e9ebee;
+  --color-graphite-200: #d9dce1;
+  --color-graphite-300: #b9bec6;
+  --color-graphite-400: #8a919c;
+  --color-graphite-500: #626a76;
+  --color-graphite-600: #4a515c;
+  --color-graphite-700: #353b45;
+  --color-graphite-800: #23282f;
+  --color-graphite-900: #171b21;
+  --color-graphite-950: #0e1115;
 
-  /* Brand accents */
-  --color-accent: #22e1f5; /* electric cyan */
-  --color-accent-strong: #7aeefb;
-  --color-ice: #a9d6ff; /* ice blue */
+  /* Electric cyan — primary accent.
+     500: indicators and lines; 600: icons/UI on white (>=3:1); 700: text on white (>=4.5:1). */
+  --color-accent-50: #effcfe;
+  --color-accent-100: #d3f6fc;
+  --color-accent-200: #a6ecf8;
+  --color-accent-300: #67dcf0;
+  --color-accent-400: #22c8e4;
+  --color-accent-500: #00b0d0;
+  --color-accent-600: #0596b3;
+  --color-accent-700: #087b92;
+
+  /* Ice blue — secondary accent and atmospheric depth */
+  --color-ice-50: #f3f8fd;
+  --color-ice-100: #e5f0fb;
+  --color-ice-200: #cbe0f6;
+  --color-ice-300: #a3c6ee;
+  --color-ice-400: #75a7e2;
+  --color-ice-500: #4f88d2;
 
   /* Security semantics: reserved for traffic classification and severity */
-  --color-sev-normal: #94a7bd;
-  --color-sev-low: #3ad49a;
-  --color-sev-medium: #f5b544;
-  --color-sev-high: #ff8a3d;
-  --color-sev-critical: #ff4d63;
+  --color-sev-normal: #8c97a8;
+  --color-sev-low: #1f9d68;
+  --color-sev-medium: #e09b0d;
+  --color-sev-high: #e8661f;
+  --color-sev-critical: #e0364c;
 
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
@@ -46,32 +62,34 @@
   /* Type scale additions (Tailwind's default xs–9xl scale remains available) */
   --text-micro: 0.6875rem;
   --text-micro--line-height: 1rem;
-  --text-display: 2.125rem;
-  --text-display--line-height: 1.1;
-  --text-display--letter-spacing: -0.025em;
-  --text-telemetry: 2.5rem;
-  --text-telemetry--line-height: 1;
-  --text-telemetry--letter-spacing: -0.03em;
+  --text-display: 2.75rem;
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.035em;
+  --text-metric: 2.5rem;
+  --text-metric--line-height: 1;
+  --text-metric--letter-spacing: -0.03em;
 
-  --tracking-label: 0.18em;
+  --tracking-label: 0.14em;
 
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
 
-  --shadow-panel: inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 24px 48px -28px rgb(1 3 6 / 0.9);
-  --shadow-glow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 30%, transparent),
-    0 0 24px -4px color-mix(in oklab, var(--color-accent) 55%, transparent);
+  /* Elevation: soft, natural, graphite-tinted shadows */
+  --shadow-control: 0 1px 2px 0 rgb(14 17 21 / 0.06), inset 0 -1px 0 0 rgb(14 17 21 / 0.03);
+  --shadow-surface: 0 1px 2px 0 rgb(14 17 21 / 0.04), 0 1px 1px 0 rgb(14 17 21 / 0.02),
+    0 12px 28px -16px rgb(14 17 21 / 0.12);
+  --shadow-raised: 0 2px 4px 0 rgb(14 17 21 / 0.05), 0 22px 44px -22px rgb(14 17 21 / 0.22);
 
-  --animate-signal: signal 2.6s var(--ease-out-expo) infinite;
+  --animate-signal: signal 2.4s var(--ease-out-expo) infinite;
 
   @keyframes signal {
     0% {
       transform: scale(1);
-      opacity: 0.55;
+      opacity: 0.5;
     }
     80%,
     100% {
-      transform: scale(2.8);
+      transform: scale(2.6);
       opacity: 0;
     }
   }
@@ -79,101 +97,68 @@
 
 @layer base {
   html {
-    background-color: var(--color-obsidian-900);
-    color-scheme: dark;
+    background-color: var(--color-canvas);
+    color-scheme: light;
   }
 
   body {
     min-height: 100dvh;
     font-family: var(--font-sans);
-    color: var(--color-ink-200);
+    color: var(--color-graphite-800);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
   ::selection {
-    background-color: color-mix(in oklab, var(--color-accent) 28%, transparent);
-    color: var(--color-ink-50);
+    background-color: var(--color-accent-100);
+    color: var(--color-graphite-950);
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--color-accent-600);
     outline-offset: 2px;
   }
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-obsidian-600) transparent;
+    scrollbar-color: var(--color-graphite-300) transparent;
   }
 }
 
 @layer components {
-  /* Fixed ambient environment behind the application shell */
-  .app-backdrop {
+  /* Fixed atmosphere behind the shell: barely-there light, depth and a faint technical grid */
+  .app-atmosphere {
     position: fixed;
     inset: 0;
-    z-index: -2;
+    z-index: -1;
     pointer-events: none;
     background:
-      radial-gradient(1100px 620px at 78% -8%, color-mix(in oklab, var(--color-accent) 8%, transparent), transparent 62%),
-      radial-gradient(900px 560px at -6% 108%, color-mix(in oklab, var(--color-ice) 5%, transparent), transparent 60%),
-      var(--color-obsidian-900);
+      radial-gradient(1200px 700px at 88% -14%, color-mix(in oklab, var(--color-accent-100) 55%, transparent), transparent 62%),
+      radial-gradient(1000px 640px at -12% -4%, color-mix(in oklab, var(--color-ice-100) 75%, transparent), transparent 62%),
+      radial-gradient(1100px 700px at 50% 112%, color-mix(in oklab, var(--color-canvas-warm) 90%, transparent), transparent 62%),
+      var(--color-canvas);
   }
 
-  .app-backdrop::before {
+  .app-atmosphere::before {
     content: "";
     position: absolute;
     inset: 0;
     background-image:
-      linear-gradient(to right, color-mix(in oklab, var(--color-white) 2.2%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklab, var(--color-white) 2.2%, transparent) 1px, transparent 1px);
-    background-size: 64px 64px;
-    mask-image: radial-gradient(ellipse 80% 60% at 60% 0%, #000 20%, transparent 75%);
+      linear-gradient(to right, color-mix(in oklab, var(--color-graphite-900) 3.5%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-graphite-900) 3.5%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 55% at 55% 0%, #000 15%, transparent 70%);
   }
 
-  .app-backdrop::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    opacity: 0.035;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
-
-  /* Soft light that trails the cursor; positioned via transform only */
-  .cursor-light {
-    position: fixed;
-    left: 0;
-    top: 0;
-    z-index: -1;
-    width: 640px;
-    height: 640px;
-    border-radius: 9999px;
-    pointer-events: none;
-    opacity: 0;
-    background: radial-gradient(
-      circle,
-      color-mix(in oklab, var(--color-accent) 7%, transparent) 0%,
-      color-mix(in oklab, var(--color-ice) 3%, transparent) 35%,
-      transparent 68%
-    );
-    transition:
-      opacity 700ms ease,
-      transform 900ms var(--ease-out-expo);
-    will-change: transform;
-  }
-
-  /* Base surface: restrained glass over the obsidian environment */
+  /* Base surface: clean white, graphite hairline, soft natural elevation */
   .panel {
     position: relative;
     isolation: isolate;
-    border-radius: 1rem;
-    border: 1px solid color-mix(in oklab, var(--color-white) 7%, transparent);
-    background:
-      linear-gradient(90deg, transparent, color-mix(in oklab, var(--color-white) 12%, transparent), transparent) top / 100% 1px no-repeat,
-      linear-gradient(180deg, color-mix(in oklab, var(--color-white) 3.5%, transparent), color-mix(in oklab, var(--color-white) 1%, transparent)),
-      color-mix(in oklab, var(--color-obsidian-850) 78%, transparent);
-    box-shadow: var(--shadow-panel);
+    border-radius: 14px;
+    border: 1px solid color-mix(in oklab, var(--color-graphite-900) 7%, transparent);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-surface);
   }
 
   /* Cursor-tracking border light (pointer position set by useSurfaceInteraction) */
@@ -187,8 +172,8 @@
     pointer-events: none;
     opacity: 0;
     background: radial-gradient(
-      280px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
-      color-mix(in oklab, var(--color-accent) 60%, transparent),
+      240px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
+      color-mix(in oklab, var(--color-accent-400) 60%, transparent),
       transparent 70%
     );
     -webkit-mask:
@@ -199,23 +184,25 @@
       linear-gradient(#000 0 0) content-box,
       linear-gradient(#000 0 0);
     mask-composite: exclude;
-    transition: opacity 500ms var(--ease-out-expo);
+    transition: opacity 400ms var(--ease-out-expo);
   }
 
   .panel-interactive[data-pointer-active]::before {
     opacity: 1;
   }
 
-  /* Subtle 3D response for small cards */
+  /* Tactile cards: subtle tilt, lift and a soft ice-tinted sheen under the cursor */
   .panel-tilt {
-    transform: perspective(1100px) rotateX(var(--tilt-rx, 0deg)) rotateY(var(--tilt-ry, 0deg));
+    transform: perspective(1000px) rotateX(var(--tilt-rx, 0deg)) rotateY(var(--tilt-ry, 0deg))
+      translateY(var(--lift, 0px));
     transition:
-      transform 700ms var(--ease-out-expo),
-      border-color 300ms ease;
+      transform 600ms var(--ease-out-expo),
+      box-shadow 300ms ease;
   }
 
   .panel-tilt[data-pointer-active] {
-    border-color: color-mix(in oklab, var(--color-white) 11%, transparent);
+    --lift: -2px;
+    box-shadow: var(--shadow-raised);
     transition-duration: 140ms, 300ms;
   }
 
@@ -228,15 +215,33 @@
     pointer-events: none;
     opacity: 0;
     background: radial-gradient(
-      420px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
-      color-mix(in oklab, var(--color-ice) 7%, transparent),
+      380px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
+      color-mix(in oklab, var(--color-ice-100) 80%, transparent),
       transparent 65%
     );
-    transition: opacity 500ms var(--ease-out-expo);
+    transition: opacity 400ms var(--ease-out-expo);
   }
 
   .panel-tilt[data-pointer-active]::after {
     opacity: 1;
+  }
+
+  /* Magnetic controls drift a few pixels toward the cursor (offset set by useMagnetic) */
+  .magnetic {
+    translate: var(--magnet-x, 0px) var(--magnet-y, 0px);
+    transition: translate 300ms var(--ease-out-expo);
+  }
+
+  .magnetic[data-magnet-active] {
+    transition-duration: 120ms;
+  }
+
+  /* Spatial backdrop for the 3D topology: ice-blue depth on a light field */
+  .topology-atmosphere {
+    background:
+      radial-gradient(60% 58% at 50% 60%, color-mix(in oklab, var(--color-ice-100) 90%, transparent), transparent 76%),
+      radial-gradient(38% 32% at 74% 26%, color-mix(in oklab, var(--color-accent-50) 95%, transparent), transparent 72%),
+      linear-gradient(180deg, var(--color-white), color-mix(in oklab, var(--color-ice-50) 75%, var(--color-white)));
   }
 }
 
