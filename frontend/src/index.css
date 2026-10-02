@@ -1,0 +1,252 @@
+@import "tailwindcss";
+
+/*
+ * AI-IDS design tokens.
+ * The default Tailwind palette is cleared so every color in the UI comes from
+ * a named, semantic token below. `static` keeps all variables emitted so they
+ * can also be used from custom CSS, SVG and inline styles via var().
+ */
+@theme static {
+  --color-*: initial;
+  --color-white: #ffffff;
+
+  /* Obsidian surfaces: layered graphite, never pure black */
+  --color-obsidian-950: #06080b;
+  --color-obsidian-900: #090c11;
+  --color-obsidian-850: #0d1117;
+  --color-obsidian-800: #11161e;
+  --color-obsidian-700: #171d27;
+  --color-obsidian-600: #1f2733;
+  --color-obsidian-500: #2a3442;
+
+  /* Ink: text and iconography (ink-500 and lighter meet WCAG AA on panels) */
+  --color-ink-50: #f3f6fa;
+  --color-ink-100: #e4ebf2;
+  --color-ink-200: #c7d1dc;
+  --color-ink-300: #a6b2c0;
+  --color-ink-400: #8a96a7;
+  --color-ink-500: #7a8699;
+  --color-ink-600: #566173;
+
+  /* Brand accents */
+  --color-accent: #22e1f5; /* electric cyan */
+  --color-accent-strong: #7aeefb;
+  --color-ice: #a9d6ff; /* ice blue */
+
+  /* Security semantics: reserved for traffic classification and severity */
+  --color-sev-normal: #94a7bd;
+  --color-sev-low: #3ad49a;
+  --color-sev-medium: #f5b544;
+  --color-sev-high: #ff8a3d;
+  --color-sev-critical: #ff4d63;
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
+
+  /* Type scale additions (Tailwind's default xs–9xl scale remains available) */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  --text-display: 2.125rem;
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.025em;
+  --text-telemetry: 2.5rem;
+  --text-telemetry--line-height: 1;
+  --text-telemetry--letter-spacing: -0.03em;
+
+  --tracking-label: 0.18em;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --shadow-panel: inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 24px 48px -28px rgb(1 3 6 / 0.9);
+  --shadow-glow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 30%, transparent),
+    0 0 24px -4px color-mix(in oklab, var(--color-accent) 55%, transparent);
+
+  --animate-signal: signal 2.6s var(--ease-out-expo) infinite;
+
+  @keyframes signal {
+    0% {
+      transform: scale(1);
+      opacity: 0.55;
+    }
+    80%,
+    100% {
+      transform: scale(2.8);
+      opacity: 0;
+    }
+  }
+}
+
+@layer base {
+  html {
+    background-color: var(--color-obsidian-900);
+    color-scheme: dark;
+  }
+
+  body {
+    min-height: 100dvh;
+    font-family: var(--font-sans);
+    color: var(--color-ink-200);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 28%, transparent);
+    color: var(--color-ink-50);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-obsidian-600) transparent;
+  }
+}
+
+@layer components {
+  /* Fixed ambient environment behind the application shell */
+  .app-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background:
+      radial-gradient(1100px 620px at 78% -8%, color-mix(in oklab, var(--color-accent) 8%, transparent), transparent 62%),
+      radial-gradient(900px 560px at -6% 108%, color-mix(in oklab, var(--color-ice) 5%, transparent), transparent 60%),
+      var(--color-obsidian-900);
+  }
+
+  .app-backdrop::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--color-white) 2.2%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-white) 2.2%, transparent) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(ellipse 80% 60% at 60% 0%, #000 20%, transparent 75%);
+  }
+
+  .app-backdrop::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Soft light that trails the cursor; positioned via transform only */
+  .cursor-light {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: -1;
+    width: 640px;
+    height: 640px;
+    border-radius: 9999px;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      circle,
+      color-mix(in oklab, var(--color-accent) 7%, transparent) 0%,
+      color-mix(in oklab, var(--color-ice) 3%, transparent) 35%,
+      transparent 68%
+    );
+    transition:
+      opacity 700ms ease,
+      transform 900ms var(--ease-out-expo);
+    will-change: transform;
+  }
+
+  /* Base surface: restrained glass over the obsidian environment */
+  .panel {
+    position: relative;
+    isolation: isolate;
+    border-radius: 1rem;
+    border: 1px solid color-mix(in oklab, var(--color-white) 7%, transparent);
+    background:
+      linear-gradient(90deg, transparent, color-mix(in oklab, var(--color-white) 12%, transparent), transparent) top / 100% 1px no-repeat,
+      linear-gradient(180deg, color-mix(in oklab, var(--color-white) 3.5%, transparent), color-mix(in oklab, var(--color-white) 1%, transparent)),
+      color-mix(in oklab, var(--color-obsidian-850) 78%, transparent);
+    box-shadow: var(--shadow-panel);
+  }
+
+  /* Cursor-tracking border light (pointer position set by useSurfaceInteraction) */
+  .panel-interactive::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      280px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
+      color-mix(in oklab, var(--color-accent) 60%, transparent),
+      transparent 70%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    transition: opacity 500ms var(--ease-out-expo);
+  }
+
+  .panel-interactive[data-pointer-active]::before {
+    opacity: 1;
+  }
+
+  /* Subtle 3D response for small cards */
+  .panel-tilt {
+    transform: perspective(1100px) rotateX(var(--tilt-rx, 0deg)) rotateY(var(--tilt-ry, 0deg));
+    transition:
+      transform 700ms var(--ease-out-expo),
+      border-color 300ms ease;
+  }
+
+  .panel-tilt[data-pointer-active] {
+    border-color: color-mix(in oklab, var(--color-white) 11%, transparent);
+    transition-duration: 140ms, 300ms;
+  }
+
+  .panel-tilt::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      420px circle at var(--pointer-local-x, 50%) var(--pointer-local-y, 50%),
+      color-mix(in oklab, var(--color-ice) 7%, transparent),
+      transparent 65%
+    );
+    transition: opacity 500ms var(--ease-out-expo);
+  }
+
+  .panel-tilt[data-pointer-active]::after {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
