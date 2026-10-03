@@ -6,5 +6,6 @@ discover and create their tables.
 from app.models.detection_batch import DetectionBatch
 from app.models.model_metadata import ModelMetadata
 from app.models.detection_result import DetectionResult
+from app.models.mapped_feature_record import MappedFeatureRecord
 
-__all__ = ["DetectionBatch", "ModelMetadata", "DetectionResult"]
+__all__ = ["DetectionBatch", "ModelMetadata", "DetectionResult", "MappedFeatureRecord"]

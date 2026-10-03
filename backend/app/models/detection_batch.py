@@ -58,3 +58,11 @@ class DetectionBatch(Base):
         # if a batch row is removed. Deleting a batch with results is left
         # to a deliberate, explicit operation designed in a later step.
     )
+
+    mapped_feature_records: Mapped[list["MappedFeatureRecord"]] = relationship(
+        "MappedFeatureRecord",
+        back_populates="batch",
+        # No cascade delete, consistent with `results` above: persisted
+        # feature history must not disappear silently if a batch row is
+        # removed.
+    )

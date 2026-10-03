@@ -371,6 +371,21 @@ class MappedFeatureSet:
 - **No dataset-wide fitting.** `map_canonical_record()` takes a single `CanonicalDatasetRecord` and nothing else — no scaler, no fitted parameters, no access to any other record. It cannot compute a mean, standard deviation, or dataset-wide min/max even in principle, because it never sees more than one row.
 - **Not persisted, not wired into batch processing.** `MappedFeatureSet` is an in-memory value only — no new database table exists for it, and `batch_processor.py` does not call this module (it is not called from anywhere in the live request path yet, for the same reason `dataset_adapters` and `dataset_profiling` are not: there is still no mechanism for a batch to declare or select a dataset). A later step that does is responsible for wiring ingestion → adapter selection → this module → model inference together.
 
+## Dataset Feature Persistence
+
+```
+CanonicalDatasetRecord -> map_canonical_record() -> MappedFeatureSet -> persist_mapped_features() -> MappedFeatureRecord (DB)
+```
+
+Step 21 adds the first persistent storage for mapped features: `app/models/mapped_feature_record.py` (`MappedFeatureRecord`) and `app/services/feature_persistence.py`. **This is storage only — it does not train a model, run inference, or generate a prediction, confidence, severity or risk score.**
+
+- **Wired into processing.** `batch_processor._run_feature_extraction` now tries `dataset_adapters.select_adapter()` on the batch's CSV header once. For a **recognized** schema, every row is adapted, mapped, and persisted as a `MappedFeatureRecord`. For an **unrecognized** schema, nothing is persisted — rows still go through the plain `feature_extraction.extract_features` path (proving they parse cleanly) without guessing a dataset identity nobody confirmed. Either way the batch stays `processing`, never `completed` — persisting features is not detection.
+- **Representation.** One row per CSV data row: `batch_id`, `row_number`, `feature_schema_version`, `dataset_schema`, a `features` JSON object (`{canonical_name: {"value", "status", "source_column", "raw_value"}}` for every `FEATURE_SCHEMA` name), `unknown_fields` JSON (unmapped columns only — not the full original row, which stays reachable via ingestion if ever needed), and `created_at`. A missing/malformed/unsupported feature's `"value"` is always `null`, never `0`; `"status"` (reusing `FeatureStatus`) says which. `app.services.feature_persistence.load_feature_vector()` rebuilds the ordered vector by walking `FEATURE_SCHEMA` explicitly — never JSON/dict key order.
+- **Transactional.** `persist_mapped_features` only `db.add()`s; `batch_processor` commits once after a whole batch's rows are staged, and rolls back before marking a batch `failed` — so a failed batch never leaves a partially persisted feature set. Verified by a test that fails mapping partway through a batch and confirms zero rows remain.
+- **Batch isolation & duplicate protection.** Every row carries its `batch_id`; a `UniqueConstraint("batch_id", "row_number")` is a database-level backstop (not a second concurrency mechanism) against ever creating two rows for the same batch/row pair — the existing atomic `claim_for_processing` already prevents a batch from being processed twice.
+- **No migration framework exists** in this repository (no Alembic). `MappedFeatureRecord` is a brand-new table, so `Base.metadata.create_all()` (already run at startup) creates it additively without touching existing tables — the smallest change consistent with the repository's current schema-management approach. Altering this table's shape later will need a real migration tool; that is out of scope here.
+- **Not an API-facing feature yet.** No new endpoint was added — persistence happens only as a side effect of the existing `POST /process` endpoint; `MappedFeatureRecord` rows are not returned by any route.
+
 ## Dataset Profiling
 
 ```

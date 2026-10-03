@@ -302,7 +302,9 @@ class TestStreamingAndDuplicateCalls:
 
         assert calls == [1, 2, 3]  # each row extracted exactly once, in order
 
-    def test_rows_are_ingested_and_extracted_interleaved_not_materialized_as_a_list_first(self, tmp_path, monkeypatch):
+    def test_rows_are_ingested_and_extracted_interleaved_not_materialized_as_a_list_first(
+        self, db_session, tmp_path, monkeypatch
+    ):
         events: list[str] = []
 
         def fake_ingest_batch(_path):
@@ -314,26 +316,30 @@ class TestStreamingAndDuplicateCalls:
             events.append(f"extract-{record.row_number}")
             return None
 
+        monkeypatch.setattr(batch_processor, "read_header", lambda _path: ["unrecognized_column"])
         monkeypatch.setattr(batch_processor, "ingest_batch", fake_ingest_batch)
         monkeypatch.setattr(batch_processor, "extract_features", fake_extract_features)
 
-        _run_feature_extraction(tmp_path / "irrelevant.csv")
+        _run_feature_extraction(db_session, uuid.uuid4(), tmp_path / "irrelevant.csv")
 
         # Interleaved (yield, extract, yield, extract, ...), proving each
         # record is consumed before the next is produced — not
         # "yield every row, then extract every row".
         assert events == ["yield-0", "extract-0", "yield-1", "extract-1", "yield-2", "extract-2"]
 
-    def test_returns_a_processing_summary_with_consistent_counts(self, tmp_path, monkeypatch):
+    def test_returns_a_processing_summary_with_consistent_counts(self, db_session, tmp_path, monkeypatch):
+        monkeypatch.setattr(batch_processor, "read_header", lambda _path: ["unrecognized_column"])
         monkeypatch.setattr(batch_processor, "ingest_batch", lambda _path: iter([_FakeRecord(0), _FakeRecord(1)]))
         monkeypatch.setattr(batch_processor, "extract_features", lambda record: None)
 
-        summary = _run_feature_extraction(tmp_path / "irrelevant.csv")
+        summary = _run_feature_extraction(db_session, uuid.uuid4(), tmp_path / "irrelevant.csv")
 
         assert summary == ProcessingSummary(
             records_ingested=2,
             records_feature_extracted=2,
+            records_persisted=0,
             feature_schema_version=summary.feature_schema_version,
+            dataset_schema=None,
         )
 
 
