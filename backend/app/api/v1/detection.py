@@ -1,7 +1,8 @@
-"""Detection endpoints: CSV upload (registers a pending batch) and batch listing."""
+"""Detection endpoints: CSV upload, batch listing, and single-batch retrieval."""
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -10,12 +11,26 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import ApiException
 from app.db.database import get_db
+from app.models.detection_batch import DetectionBatch
 from app.schemas.batch import DetectionBatchListResponse, DetectionBatchSummary, UploadBatchResponse
 from app.schemas.common import ErrorResponse
-from app.services.batch_service import list_batches
+from app.services.batch_service import get_batch, list_batches
 from app.services.upload_service import UploadConfig, register_upload
 
 router = APIRouter(prefix="/detection")
+
+
+def _summarize(batch: DetectionBatch) -> DetectionBatchSummary:
+    return DetectionBatchSummary(
+        batch_id=batch.id,
+        filename=batch.filename,
+        status=batch.status,
+        total_records=batch.total_records,
+        processed_records=batch.processed_records,
+        failed_records=batch.failed_records,
+        created_at=batch.created_at,
+        completed_at=batch.completed_at,
+    )
 
 
 def get_upload_config() -> UploadConfig:
@@ -89,21 +104,30 @@ def get_detection_batches(
 ) -> DetectionBatchListResponse:
     result = list_batches(db, page=page, page_size=page_size)
     return DetectionBatchListResponse(
-        items=[
-            DetectionBatchSummary(
-                batch_id=batch.id,
-                filename=batch.filename,
-                status=batch.status,
-                total_records=batch.total_records,
-                processed_records=batch.processed_records,
-                failed_records=batch.failed_records,
-                created_at=batch.created_at,
-                completed_at=batch.completed_at,
-            )
-            for batch in result.items
-        ],
+        items=[_summarize(batch) for batch in result.items],
         page=page,
         page_size=page_size,
         total_items=result.total_items,
         total_pages=result.total_pages,
     )
+
+
+@router.get(
+    "/batches/{batch_id}",
+    response_model=DetectionBatchSummary,
+    summary="Retrieve one persisted detection batch by id",
+    description=(
+        "Returns the batch exactly as stored. A freshly registered batch is `pending`; no "
+        "analysis has run on its traffic."
+    ),
+    responses={
+        404: {"model": ErrorResponse, "description": "No batch exists with that ID"},
+        422: {"model": ErrorResponse, "description": "batch_id is not a valid UUID"},
+        500: {"model": ErrorResponse, "description": "The batch could not be loaded"},
+    },
+)
+def get_detection_batch(
+    batch_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> DetectionBatchSummary:
+    return _summarize(get_batch(db, batch_id))

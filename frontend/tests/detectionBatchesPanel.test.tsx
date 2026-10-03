@@ -438,3 +438,82 @@ describe('Detection batches — no invented IDS data', () => {
     expect(panel().textContent).not.toMatch(/threat|attack|risk|confidence|severity|score/i)
   })
 })
+
+describe('Detection batches — row selection and detail dialog', () => {
+  it('opens the detail dialog for the clicked batch', async () => {
+    const first = batchItem({ batch_id: 'batch-1', filename: 'first.csv' })
+    const second = batchItem({ batch_id: 'batch-2', filename: 'second.csv' })
+    stubBackend([first, second])
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    await user.click(screen.getByRole('button', { name: `View details for ${first.filename}` }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByRole('heading', { name: first.filename })).toBeInTheDocument()
+  })
+
+  it('shows the correct data for whichever row was clicked, not the first row', async () => {
+    const first = batchItem({ batch_id: 'batch-1', filename: 'first.csv' })
+    const third = batchItem({ batch_id: 'batch-3', filename: 'third.csv' })
+    stubBackend([first, third])
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    await user.click(screen.getByRole('button', { name: `View details for ${third.filename}` }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByRole('heading', { name: third.filename })).toBeInTheDocument()
+    expect(within(dialog).getByText(third.batch_id)).toBeInTheDocument()
+  })
+
+  it('closes the dialog when the close button is activated, returning to the batch list', async () => {
+    const only = batchItem({ batch_id: 'batch-1', filename: 'only.csv' })
+    stubBackend([only])
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    await user.click(screen.getByRole('button', { name: `View details for ${only.filename}` }))
+    await screen.findByRole('dialog')
+
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(rowNames()).toEqual([only.filename])
+  })
+
+  it('opens a second batch cleanly after closing the first, without bleeding data between them', async () => {
+    const first = batchItem({ batch_id: 'batch-1', filename: 'first.csv' })
+    const second = batchItem({ batch_id: 'batch-2', filename: 'second.csv' })
+    stubBackend([first, second])
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    await user.click(screen.getByRole('button', { name: `View details for ${first.filename}` }))
+    let dialog = await screen.findByRole('dialog')
+    await within(dialog).findByRole('heading', { name: first.filename })
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: `View details for ${second.filename}` }))
+    dialog = await screen.findByRole('dialog')
+
+    expect(await within(dialog).findByRole('heading', { name: second.filename })).toBeInTheDocument()
+    expect(within(dialog).queryByText(first.filename)).not.toBeInTheDocument()
+  })
+
+  it('reaches a batch row by keyboard and opens its detail dialog with Enter', async () => {
+    const only = batchItem({ batch_id: 'batch-1', filename: 'only.csv' })
+    stubBackend([only])
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    const row = screen.getByRole('button', { name: `View details for ${only.filename}` })
+    row.focus()
+    expect(row).toHaveFocus()
+    await user.keyboard('{Enter}')
+
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByRole('heading', { name: only.filename })).toBeInTheDocument()
+  })
+})

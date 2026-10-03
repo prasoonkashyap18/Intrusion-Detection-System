@@ -1,13 +1,15 @@
 import { ChevronLeft, ChevronRight, Inbox, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { BatchDetailDialog } from '../../components/batch/BatchDetailDialog'
+import { STATUS_PRESENTATION } from '../../components/batch/batchStatus'
 import { EmptyState, ErrorState, LoadingState, OfflineState } from '../../components/states'
 import { Button } from '../../components/ui/Button'
 import { Panel } from '../../components/ui/Panel'
 import { SectionHeading } from '../../components/ui/SectionHeading'
-import { StatusDot, type StatusTone } from '../../components/ui/StatusDot'
+import { StatusDot } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
 import type { DetectionBatches } from '../../hooks/useDetectionBatches'
 import type { DetectionBatch } from '../../types/detection'
-import type { ProcessingStatus } from '../../types/security'
 import { cn } from '../../utils/cn'
 import { formatCount, formatLocalDateTime, formatUtcDateTime } from '../../utils/format'
 
@@ -18,51 +20,46 @@ interface DetectionBatchesPanelProps {
   className?: string
 }
 
-interface StatusPresentation {
-  label: string
-  /** What the status means, in words, so it never depends on colour. */
-  meaning: string
-  tone: StatusTone
-}
-
-// Connection-style tones only: batch status is not a security severity.
-const STATUS_PRESENTATION: Record<ProcessingStatus, StatusPresentation> = {
-  pending: { label: 'Pending', meaning: 'registered, waiting for processing', tone: 'ice' },
-  processing: { label: 'Processing', meaning: 'being processed', tone: 'accent' },
-  completed: { label: 'Completed', meaning: 'processing finished', tone: 'accent' },
-  failed: { label: 'Failed', meaning: 'processing failed', tone: 'muted' },
-}
-
 export function DetectionBatchesPanel({ batches, apiHealth, className }: DetectionBatchesPanelProps) {
   const { data, isLoading, refresh } = batches
   const isRefreshing = isLoading && data !== null
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
 
   return (
-    <Panel
-      interaction="spotlight"
-      aria-labelledby="detection-batches-heading"
-      className={cn('flex flex-col p-6 lg:p-7', className)}
-    >
-      <SectionHeading
-        id="detection-batches-heading"
-        title="Detection batches"
-        description="Registered batches, newest first, loaded from the database."
-        action={
-          <Button onClick={refresh} disabled={isLoading}>
-            <RefreshCw className={cn('size-3.5', isLoading && 'animate-spin')} aria-hidden="true" />
-            Refresh
-          </Button>
-        }
-      />
-      <p aria-live="polite" className="sr-only">
-        {isRefreshing ? 'Refreshing batches' : ''}
-      </p>
-      <BatchesContent batches={batches} apiHealth={apiHealth} />
-    </Panel>
+    <>
+      <Panel
+        interaction="spotlight"
+        aria-labelledby="detection-batches-heading"
+        className={cn('flex flex-col p-6 lg:p-7', className)}
+      >
+        <SectionHeading
+          id="detection-batches-heading"
+          title="Detection batches"
+          description="Registered batches, newest first, loaded from the database. Select one for details."
+          action={
+            <Button onClick={refresh} disabled={isLoading}>
+              <RefreshCw className={cn('size-3.5', isLoading && 'animate-spin')} aria-hidden="true" />
+              Refresh
+            </Button>
+          }
+        />
+        <p aria-live="polite" className="sr-only">
+          {isRefreshing ? 'Refreshing batches' : ''}
+        </p>
+        <BatchesContent batches={batches} apiHealth={apiHealth} onSelectBatch={setSelectedBatchId} />
+      </Panel>
+      {selectedBatchId && <BatchDetailDialog batchId={selectedBatchId} onClose={() => setSelectedBatchId(null)} />}
+    </>
   )
 }
 
-function BatchesContent({ batches, apiHealth }: { batches: DetectionBatches; apiHealth: ApiHealth }) {
+interface BatchesContentProps {
+  batches: DetectionBatches
+  apiHealth: ApiHealth
+  onSelectBatch: (batchId: string) => void
+}
+
+function BatchesContent({ batches, apiHealth, onSelectBatch }: BatchesContentProps) {
   const { data, failure, isLoading, refresh } = batches
 
   if (!data) {
@@ -115,7 +112,7 @@ function BatchesContent({ batches, apiHealth }: { batches: DetectionBatches; api
         <>
           <ul aria-busy={isLoading} className={cn('mt-6 divide-y divide-graphite-900/6 transition-opacity', isLoading && 'opacity-60')}>
             {data.items.map((batch) => (
-              <BatchRow key={batch.batch_id} batch={batch} />
+              <BatchRow key={batch.batch_id} batch={batch} onSelect={onSelectBatch} />
             ))}
           </ul>
           <BatchPager batches={batches} />
@@ -125,39 +122,46 @@ function BatchesContent({ batches, apiHealth }: { batches: DetectionBatches; api
   )
 }
 
-function BatchRow({ batch }: { batch: DetectionBatch }) {
+function BatchRow({ batch, onSelect }: { batch: DetectionBatch; onSelect: (batchId: string) => void }) {
   const status = STATUS_PRESENTATION[batch.status]
 
   return (
-    <li className="flex flex-col gap-1.5 py-4 first:pt-0 last:pb-0">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <p className="min-w-0 flex-1 truncate text-sm font-medium text-graphite-900" title={batch.filename}>
-          {batch.filename}
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(batch.batch_id)}
+        aria-label={`View details for ${batch.filename}`}
+        className="-mx-2 flex w-[calc(100%+1rem)] flex-col gap-1.5 rounded-lg px-2 py-4 text-left transition-colors duration-150 hover:bg-graphite-900/3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-graphite-900" title={batch.filename}>
+            {batch.filename}
+          </p>
+          <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-graphite-700">
+            <StatusDot tone={status.tone} />
+            <span className="font-medium">{status.label}</span>
+            <span className="text-graphite-500">· {status.meaning}</span>
+          </span>
+        </div>
+        <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-graphite-500">
+          <span>
+            <span className="tabular-nums text-graphite-700">{formatCount(batch.total_records)}</span>{' '}
+            {batch.total_records === 1 ? 'record' : 'records'}
+          </span>
+          <span>
+            <span className="tabular-nums text-graphite-700">{formatCount(batch.processed_records)}</span> processed
+          </span>
+          <span>
+            <span className="tabular-nums text-graphite-700">{formatCount(batch.failed_records)}</span> failed
+          </span>
+          <time dateTime={batch.created_at} title={formatUtcDateTime(batch.created_at)} className="tabular-nums">
+            {formatLocalDateTime(batch.created_at)}
+          </time>
         </p>
-        <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-graphite-700">
-          <StatusDot tone={status.tone} />
-          <span className="font-medium">{status.label}</span>
-          <span className="text-graphite-500">· {status.meaning}</span>
-        </span>
-      </div>
-      <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-graphite-500">
-        <span>
-          <span className="tabular-nums text-graphite-700">{formatCount(batch.total_records)}</span>{' '}
-          {batch.total_records === 1 ? 'record' : 'records'}
-        </span>
-        <span>
-          <span className="tabular-nums text-graphite-700">{formatCount(batch.processed_records)}</span> processed
-        </span>
-        <span>
-          <span className="tabular-nums text-graphite-700">{formatCount(batch.failed_records)}</span> failed
-        </span>
-        <time dateTime={batch.created_at} title={formatUtcDateTime(batch.created_at)} className="tabular-nums">
-          {formatLocalDateTime(batch.created_at)}
-        </time>
-      </p>
-      <p className="truncate font-mono text-xs text-graphite-500" title={batch.batch_id}>
-        {batch.batch_id}
-      </p>
+        <p className="truncate font-mono text-xs text-graphite-500" title={batch.batch_id}>
+          {batch.batch_id}
+        </p>
+      </button>
     </li>
   )
 }

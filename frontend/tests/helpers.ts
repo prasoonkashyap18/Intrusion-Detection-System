@@ -62,7 +62,7 @@ export function batchItem(overrides: Partial<DetectionBatch> = {}): DetectionBat
 }
 
 /**
- * A stateful stand-in for the backend's two detection endpoints, used only in
+ * A stateful stand-in for the backend's detection endpoints, used only in
  * tests. It pages newest-first like the real endpoint, and uploads add a batch
  * to the same store, so tests can prove the UI reads persisted data rather
  * than holding its own copy.
@@ -74,6 +74,7 @@ export function stubBackend(initial: DetectionBatch[] = []) {
   const fetchMock = stubFetch((input, init) => {
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
+    const detailMatch = /\/detection\/batches\/([^/]+)$/.exec(url.pathname)
 
     if (url.pathname.endsWith('/detection/batches') && method === 'GET') {
       const page = Number(url.searchParams.get('page'))
@@ -86,6 +87,16 @@ export function stubBackend(initial: DetectionBatch[] = []) {
           total_items: store.length,
           total_pages: Math.ceil(store.length / pageSize),
         }),
+      )
+    }
+
+    if (detailMatch && method === 'GET') {
+      const batchId = decodeURIComponent(detailMatch[1] ?? '')
+      const found = store.find((batch) => batch.batch_id === batchId)
+      return Promise.resolve(
+        found
+          ? jsonResponse(found)
+          : jsonResponse({ error: 'batch_not_found', message: 'No batch was found with that ID.' }, 404),
       )
     }
 

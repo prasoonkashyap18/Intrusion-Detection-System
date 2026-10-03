@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.batch import DetectionBatchResponse
+from app.schemas.batch import DetectionBatchSummary
 from app.schemas.detection import DetectionResultBase, DetectionResultResponse
 from app.schemas.enums import ProcessingStatus, Severity
 from app.schemas.model import ModelMetadataResponse
@@ -68,8 +68,8 @@ def test_invalid_severity_value_is_rejected():
 
 @pytest.mark.parametrize("value", ["pending", "processing", "completed", "failed"])
 def test_valid_batch_statuses_are_accepted(value):
-    schema = DetectionBatchResponse(
-        id=uuid.uuid4(),
+    schema = DetectionBatchSummary(
+        batch_id=uuid.uuid4(),
         filename="sample.csv",
         status=value,
         total_records=0,
@@ -82,8 +82,8 @@ def test_valid_batch_statuses_are_accepted(value):
 
 def test_invalid_batch_status_is_rejected():
     with pytest.raises(ValidationError):
-        DetectionBatchResponse(
-            id=uuid.uuid4(),
+        DetectionBatchSummary(
+            batch_id=uuid.uuid4(),
             filename="sample.csv",
             status="archived",
             total_records=0,

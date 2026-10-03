@@ -171,11 +171,29 @@ Out-of-range or non-numeric values return `422 invalid_request`. A page beyond t
 - The response never includes stored file paths or a batch's `error_message`. A database failure returns `500 batches_unavailable` with a generic message (details are logged only).
 - The generic `PageInfo` schema was not used: it describes offset/limit, while this endpoint reports page-number metadata.
 
+## Retrieving a Single Batch
+
+```
+GET /api/v1/detection/batches/{batch_id}
+```
+
+Returns one persisted batch by id, exactly as stored — the same shape as an item in the list endpoint above (`DetectionBatchSummary`).
+
+| Status | Meaning |
+|---|---|
+| `200` | The batch, as stored |
+| `404 batch_not_found` | No batch exists with that id |
+| `422 invalid_request` | `batch_id` is not a valid UUID |
+| `500 batch_unavailable` | The database could not be read; details are logged only |
+
+- `batch_id` is typed as a UUID path parameter, so FastAPI rejects a malformed id with `422` before any database lookup runs.
+- The response never includes stored file paths or a batch's `error_message`.
+
 ## API Schemas
 
 Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — what requests/responses look like at the HTTP boundary — and are kept **independent of the SQLAlchemy ORM models** (`backend/app/models/`). This separation means the API contract and the database schema can evolve independently.
 
-- `DetectionResultBase` / `DetectionResultResponse`, `DetectionBatchResponse`, `ModelMetadataResponse` — response schemas for the three entities above.
+- `DetectionResultBase` / `DetectionResultResponse`, `DetectionBatchSummary`, `ModelMetadataResponse` — response schemas for the three entities above.
 - Input validation happens at this API boundary: `confidence` is validated to `0.0–1.0` by the schema itself (not just the database constraint), and `severity`/`status` only accept the same controlled values as the database (`low`/`medium`/`high`/`critical` and `pending`/`processing`/`completed`/`failed`, respectively).
 - Response schemas use Pydantic v2's `from_attributes=True` so they can be built directly from ORM objects without manual field-by-field conversion.
 - `ModelMetadataResponse` intentionally **omits `artifact_path`** — the internal filesystem/storage path for a saved model artifact is not exposed over the public API (see the docstring in `app/schemas/model.py` for the full rationale).
@@ -195,7 +213,6 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 
 - No ML training/inference, detection results, or dashboard logic exists yet. Uploaded CSVs are registered as `pending` batches and are not analyzed.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
-- There is no endpoint to fetch a single batch yet (listing only).
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Three public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload` and `GET /api/v1/detection/batches`.
+- Four public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload`, `GET /api/v1/detection/batches` and `GET /api/v1/detection/batches/{batch_id}`.

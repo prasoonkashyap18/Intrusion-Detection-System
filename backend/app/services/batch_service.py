@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
@@ -46,3 +47,16 @@ def list_batches(db: Session, *, page: int, page_size: int) -> BatchPage:
         raise ApiException(500, "batches_unavailable", "Unable to load detection batches.") from None
 
     return BatchPage(items=items, total_items=total_items, total_pages=math.ceil(total_items / page_size))
+
+
+def get_batch(db: Session, batch_id: uuid.UUID) -> DetectionBatch:
+    """Returns one batch by id, or raises ApiException (404 if it does not exist, 500 on a database failure)."""
+    try:
+        batch = db.get(DetectionBatch, batch_id)
+    except SQLAlchemyError:
+        logger.exception("Failed to load detection batch %s", batch_id)
+        raise ApiException(500, "batch_unavailable", "Unable to load the detection batch.") from None
+
+    if batch is None:
+        raise ApiException(404, "batch_not_found", "No batch was found with that ID.")
+    return batch

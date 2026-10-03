@@ -9,23 +9,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, field_validator
 
 from app.schemas.enums import ProcessingStatus
-
-
-class DetectionBatchResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    filename: str
-    status: ProcessingStatus
-    total_records: int
-    processed_records: int
-    failed_records: int
-    error_message: str | None = None
-    created_at: datetime
-    completed_at: datetime | None = None
 
 
 class UploadBatchResponse(BaseModel):

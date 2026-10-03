@@ -83,3 +83,11 @@ export function getDetectionBatches(page: number, pageSize: number, signal?: Abo
     signal,
   })
 }
+
+/** GET /api/v1/detection/batches/{batchId} — one persisted batch by id. */
+export function getDetectionBatch(batchId: string, signal?: AbortSignal): Promise<DetectionBatch> {
+  return request(`${API_V1_PREFIX}/detection/batches/${encodeURIComponent(batchId)}`, {
+    validate: isDetectionBatch,
+    signal,
+  })
+}

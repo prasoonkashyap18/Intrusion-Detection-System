@@ -131,6 +131,21 @@ DetectionBatchesPanel → useDetectionBatches (hook) → getDetectionBatches (se
 - **States:** loading, list, empty (the backend answered: zero batches), error (the backend answered with a failure), and offline (it could not be reached) are distinct, using the shared state components.
 - **Refresh:** a manual button (no polling). The existing list stays visible while it runs, the button is disabled to prevent duplicate requests, and a failed refresh keeps the old list with an inline "Could not refresh" notice and Retry.
 - **Pagination:** 10 per page with Previous / Next, shown only when there is more than one page. If the current page disappears (batches removed elsewhere), the hook falls back to the last page.
+- **Selecting a row** opens the batch detail dialog described below.
+
+## Batch Detail
+
+Clicking a batch row (or activating it by keyboard) opens `BatchDetailDialog`, a native `<dialog>` modal showing that one batch's full record, fetched fresh via `GET /api/v1/detection/batches/{batch_id}`.
+
+```
+DetectionBatchesPanel → BatchDetailDialog → useBatchDetail (hook) → getDetectionBatch (service) → request() → FastAPI → SQLite
+```
+
+- **Content:** status (same wording as the list row), total/processed/failed record counts, created and completed times (local time with the exact UTC instant as a tooltip), and the full batch ID with a copy-to-clipboard affordance.
+- **States:** loading, success, not-found (no Retry offered — the id does not exist, so retrying cannot help), and a generic failure with Retry, using the shared state components.
+- **Identity safety:** switching which batch is selected never shows the previous batch's data under the new id — the hook masks stale results while the new request is in flight (`frontend/src/hooks/useBatchDetail.ts`).
+- **Dismissal:** the close button, Escape, or clicking outside all close the dialog (native `closedby="any"`); page scroll is locked while it is open, matching `MobileNavDrawer`'s existing pattern.
+- No detection results exist yet, so the dialog says so honestly rather than inventing a results section.
 
 ## UI State Components
 
@@ -225,7 +240,7 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 ## Current Limitations
 
 - Uploaded CSVs are registered but not analyzed. Detection results, analytics and model-performance views do not exist yet; those navigation sections are marked **Planned**.
-- Batches are listed but not individually viewable (no single-batch endpoint or detail view yet), and the list does not poll — use Refresh.
+- Batches can be opened individually for detail, but the list itself does not poll — use Refresh.
 - Upload progress is indeterminate, because `fetch` offers no upload progress events.
 - Telemetry and pipeline panels are structural placeholders — they show no data because no analysis has run.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.

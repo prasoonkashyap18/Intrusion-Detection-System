@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { getDetectionBatches, uploadDetectionCsv } from '@/services'
+import { getDetectionBatch, getDetectionBatches, uploadDetectionCsv } from '@/services'
 import { request } from '@/services/api'
 import { batchItem, batchResponse, csvFile, jsonResponse, sentFile, stubFetch } from './helpers'
 
@@ -161,5 +161,89 @@ describe('getDetectionBatches', () => {
     stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
 
     await expect(getDetectionBatches(1, 10)).rejects.toMatchObject({ code: 'network_error' })
+  })
+})
+
+describe('getDetectionBatch', () => {
+  it('issues a GET to the batch-specific URL, encoded', async () => {
+    const fetchMock = stubFetch(() => Promise.resolve(jsonResponse(batchItem())))
+
+    await getDetectionBatch('3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30')
+
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(String(url)).toBe(
+      'http://localhost:8000/api/v1/detection/batches/3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30',
+    )
+    expect(init?.method ?? 'GET').toBe('GET')
+  })
+
+  it('percent-encodes the id so it cannot alter the request path', async () => {
+    const fetchMock = stubFetch(() => Promise.resolve(jsonResponse(batchItem())))
+
+    await getDetectionBatch('../../etc/passwd')
+
+    const [url] = fetchMock.mock.calls[0] ?? []
+    expect(String(url)).toBe('http://localhost:8000/api/v1/detection/batches/..%2F..%2Fetc%2Fpasswd')
+  })
+
+  it('returns the typed batch exactly as reported, including a completed one', async () => {
+    const done = batchItem({ status: 'completed', completed_at: '2026-10-03T09:00:00Z' })
+    stubFetch(() => Promise.resolve(jsonResponse(done)))
+
+    await expect(getDetectionBatch(done.batch_id)).resolves.toEqual(done)
+  })
+
+  it.each([
+    ['a missing field', { ...batchItem(), filename: undefined }],
+    ['an unknown status', { ...batchItem(), status: 'archived' }],
+    ['completed_at missing entirely', batchResponse()],
+    ['a negative record count', { ...batchItem(), failed_records: -1 }],
+  ])('rejects a response with %s as invalid', async (_label, body) => {
+    stubFetch(() => Promise.resolve(jsonResponse(body)))
+
+    await expect(getDetectionBatch('any-id')).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('surfaces a 404 with the backend’s own explanation', async () => {
+    stubFetch(() =>
+      Promise.resolve(jsonResponse({ error: 'batch_not_found', message: 'No batch was found with that ID.' }, 404)),
+    )
+
+    await expect(getDetectionBatch('missing-id')).rejects.toMatchObject({
+      code: 'http_error',
+      status: 404,
+      detail: 'No batch was found with that ID.',
+    })
+  })
+
+  it('surfaces a server error with the backend explanation', async () => {
+    stubFetch(() =>
+      Promise.resolve(jsonResponse({ error: 'batch_unavailable', message: 'Unable to load the detection batch.' }, 500)),
+    )
+
+    await expect(getDetectionBatch('any-id')).rejects.toMatchObject({
+      code: 'http_error',
+      status: 500,
+      detail: 'Unable to load the detection batch.',
+    })
+  })
+
+  it('fails with a network error when the backend is unreachable', async () => {
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')))
+
+    await expect(getDetectionBatch('any-id')).rejects.toMatchObject({ code: 'network_error' })
+  })
+
+  it('can be cancelled by the caller', async () => {
+    stubFetch((_input, init) => {
+      const signal = init?.signal
+      return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(signal.reason)))
+    })
+    const controller = new AbortController()
+
+    const pending = getDetectionBatch('any-id', controller.signal).catch((error: unknown) => error)
+    controller.abort()
+
+    expect(await pending).toMatchObject({ code: 'aborted' })
   })
 })
