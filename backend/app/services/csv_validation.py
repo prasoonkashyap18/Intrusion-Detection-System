@@ -24,7 +24,9 @@ MIN_COLUMNS = 2
 
 # Fallback encoding for CSVs exported on Windows (some public IDS datasets are
 # not valid UTF-8). latin-1 decodes every byte, so rows are still counted.
-_ENCODINGS = ("utf-8-sig", "latin-1")
+# Public (not prefixed): app.services.ingestion reads the same stored files
+# and must try encodings in this same order to see the same text.
+ENCODINGS = ("utf-8-sig", "latin-1")
 
 _MAX_FILENAME_LENGTH = 255
 _UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
@@ -59,7 +61,7 @@ def has_csv_extension(filename: str) -> bool:
 
 def inspect_csv(path: Path) -> CsvSummary:
     """Validates structure and counts data rows. Raises ApiException (400) if invalid."""
-    for encoding in _ENCODINGS:
+    for encoding in ENCODINGS:
         try:
             return _scan(path, encoding)
         except UnicodeDecodeError:
@@ -69,7 +71,7 @@ def inspect_csv(path: Path) -> CsvSummary:
 
 def _scan(path: Path, encoding: str) -> CsvSummary:
     with path.open("r", encoding=encoding, newline="") as handle:
-        reader = csv.reader(_lines_without_nul(handle), strict=True)
+        reader = csv.reader(lines_without_nul(handle), strict=True)
         header: list[str] | None = None
         data_rows = 0
         try:
@@ -98,7 +100,10 @@ def _scan(path: Path, encoding: str) -> CsvSummary:
     return CsvSummary(column_count=len(header), data_row_count=data_rows)
 
 
-def _lines_without_nul(lines: Iterator[str]) -> Iterator[str]:
+def lines_without_nul(lines: Iterator[str]) -> Iterator[str]:
+    """Guards a line iterator against embedded NUL bytes (a reliable binary-file
+    signal). Public so app.services.ingestion can apply the same guard while
+    streaming the same stored files."""
     for line in lines:
         if "\x00" in line:
             raise _invalid("The file is not a text CSV.")

@@ -1,19 +1,31 @@
-"""Batch-processing lifecycle: the pending -> processing transition, and the
-placeholder processing boundary that a later step's CSV parsing, feature
-extraction and ML inference will plug into.
+"""Batch-processing lifecycle: the pending -> processing transition, and (as
+of this step) CSV ingestion as the first real stage of processing.
 
 Lifecycle (conservative on purpose — no other transitions are allowed yet):
 
     pending -> processing -> completed
     pending -> processing -> failed
 
-This module does not implement completed: nothing in this step actually
-analyzes traffic, so a batch that is successfully claimed and whose upload
-file is present is left `processing` rather than `completed` — marking it
-`completed` would falsely claim analysis happened. A batch only reaches
-`failed` here if processing could not even start (its upload file is
-missing) or an unexpected error occurs while starting it. Completing a batch
-is left to the step that actually runs the detection pipeline.
+This module does not implement completed: nothing in this step performs
+detection, so a batch whose CSV ingests cleanly is left `processing` rather
+than `completed` — marking it `completed` would claim IDS analysis happened
+when only ingestion did. The existing status model has no state between the
+two (e.g. an "ingested" status), and this step deliberately does not invent
+one; see "Processing boundary" below and backend/README.md for where a later
+step is expected to make the `processing -> completed` transition once it
+actually produces detection results. A batch only reaches `failed` here if
+processing could not even start (its upload file is missing), its CSV fails
+to ingest (missing file, unreadable, or structurally malformed — see
+app.services.ingestion), or an unexpected error occurs. `processed_records`
+and `failed_records` keep their pre-this-step meaning (detection outcomes)
+and are therefore left at 0 by ingestion: rows ingested is not the same
+thing as records detected, and nothing here claims otherwise.
+
+Processing boundary: `_ingest_batch_csv` below reads the batch's stored CSV
+via `app.services.ingestion.ingest_batch` and validates every row, but
+otherwise does nothing with the records it reads — no feature mapping, no
+model inference, no `DetectionResult` rows. A later step is expected to
+replace its body with that work.
 
 Concurrency: the pending -> processing transition is one atomic
 `UPDATE ... WHERE status = 'pending'` statement (`claim_for_processing`
@@ -40,6 +52,7 @@ from app.core.errors import ApiException
 from app.models.detection_batch import DetectionBatch
 from app.models.enums import ProcessingStatus
 from app.services.batch_service import get_batch
+from app.services.ingestion import ingest_batch
 
 logger = logging.getLogger("ai_ids")
 
@@ -60,14 +73,15 @@ def claim_for_processing(db: Session, batch_id: uuid.UUID) -> bool:
 
 
 def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> DetectionBatch:
-    """Claims a pending batch and runs the placeholder processing boundary.
+    """Claims a pending batch and runs the CSV-ingestion processing boundary.
 
     Raises ApiException: 404 if the batch does not exist, 409 if it is not
     pending (including the case where a concurrent call just claimed it),
-    500 on a database failure. A batch that is claimed but whose upload file
-    is missing, or that hits an unexpected error, is left in a `failed`
-    state rather than raising — the caller gets back the batch's true
-    resulting status instead of an error for a state the system handled.
+    500 on a database failure while claiming it. A batch that is claimed but
+    whose CSV cannot be ingested (missing file, unreadable, or structurally
+    invalid), or that hits an unexpected error, is left in a `failed` state
+    rather than raising — the caller gets back the batch's true resulting
+    status instead of an error for a state the system handled.
     """
     batch = get_batch(db, batch_id)
 
@@ -95,13 +109,12 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
     db.refresh(batch)
 
     csv_path = upload_dir / f"{batch_id}.csv"
-    if not csv_path.is_file():
-        logger.error("Upload file missing for batch %s", batch_id)
-        _mark_failed(db, batch, "The uploaded file for this batch could not be found.")
-        return batch
-
     try:
-        _run_placeholder_processing(batch)
+        _ingest_batch_csv(csv_path)
+    except ApiException as error:
+        logger.error("CSV ingestion failed for batch %s: %s", batch_id, error.message)
+        _mark_failed(db, batch, error.message)
+        return batch
     except Exception:
         logger.exception("Unexpected error while starting processing for batch %s", batch_id)
         _mark_failed(db, batch, "An unexpected error occurred while starting processing.")
@@ -110,17 +123,16 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
     return batch
 
 
-def _run_placeholder_processing(batch: DetectionBatch) -> None:
-    """The processing boundary a future step will replace.
-
-    A later step will read the batch's CSV here, extract features, run
-    model inference, write DetectionResult rows, and update
-    processed_records/failed_records as real rows are analyzed. For now
-    this is intentionally a no-op: no rows are read and no predictions are
-    made, so processed_records and failed_records are left untouched (0) —
-    reporting any other value here would fabricate analysis that never ran.
+def _ingest_batch_csv(csv_path: Path) -> None:
+    """The processing boundary: reads and validates the batch's CSV into the
+    generic NetworkFlowRecord representation (app.services.ingestion). A
+    later step will replace this body to consume each record for feature
+    mapping and model inference; for now, fully exhausting the iterator
+    proves every row reads and validates, and nothing else is done with it
+    — no DetectionResult rows are created and no prediction is made.
     """
-    return None
+    for _record in ingest_batch(csv_path):
+        pass
 
 
 def _mark_failed(db: Session, batch: DetectionBatch, message: str) -> None:

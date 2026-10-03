@@ -195,10 +195,10 @@ class TestUnexpectedProcessingFailure:
     def test_unexpected_exception_marks_the_batch_failed_without_leaking_details(
         self, client, db_session, upload_dir, monkeypatch
     ):
-        def boom(_batch):
+        def boom(_csv_path):
             raise RuntimeError("disk I/O error at C:\\secret\\path\\traffic.csv")
 
-        monkeypatch.setattr(batch_processor, "_run_placeholder_processing", boom)
+        monkeypatch.setattr(batch_processor, "_ingest_batch_csv", boom)
         batch = with_uploaded_file(upload_dir, add_batch(db_session))
 
         response = client.post(url_for(batch.id))
@@ -215,6 +215,49 @@ class TestUnexpectedProcessingFailure:
         assert stored.status == ProcessingStatus.FAILED
         assert stored.error_message is not None
         assert "secret" not in stored.error_message
+
+
+class TestCsvIngestionIntegration:
+    """Confirms Step 14's processing boundary actually calls Step 15's
+    ingestion service rather than a no-op — both the success and failure
+    paths observable through the public endpoint."""
+
+    def test_a_multi_row_csv_ingests_cleanly_and_stays_processing(self, client, db_session, upload_dir):
+        batch = with_uploaded_file(
+            upload_dir,
+            add_batch(db_session),
+            content=b"source_ip,destination_ip,source_port\n10.0.0.1,10.0.0.2,80\n10.0.0.3,10.0.0.4,443\n",
+        )
+
+        response = client.post(url_for(batch.id))
+
+        assert response.json()["status"] == "processing"
+        db_session.expire_all()
+        assert db_session.get(DetectionBatch, batch.id).status == ProcessingStatus.PROCESSING
+
+    def test_a_structurally_malformed_csv_fails_processing_truthfully(self, client, db_session, upload_dir):
+        # Row 2 has 3 columns where the header has 2 — the exact structural
+        # defect app.services.ingestion rejects.
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), content=b"a,b\n1,2\n3,4,5\n")
+
+        response = client.post(url_for(batch.id))
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "failed"
+        db_session.expire_all()
+        stored = db_session.get(DetectionBatch, batch.id)
+        assert stored.status == ProcessingStatus.FAILED
+        assert stored.error_message is not None
+        assert "columns" in stored.error_message
+
+    def test_ingestion_failure_does_not_leak_the_filesystem_path(self, client, db_session, upload_dir):
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), content=b"a,b\n1,2\n3,4,5\n")
+
+        response = client.post(url_for(batch.id))
+
+        assert str(upload_dir) not in response.text
+        assert ".csv" not in response.text
+        assert ".csv" not in response.text
 
 
 class TestConcurrentClaim:
