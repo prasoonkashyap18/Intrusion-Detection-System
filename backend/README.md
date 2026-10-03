@@ -333,6 +333,44 @@ class CanonicalDatasetRecord:
 - **Not wired into batch processing.** `batch_processor.py` does not call this layer. There is currently no mechanism for a batch to declare or select a dataset (no API field, no stored attribute on `DetectionBatch`), and auto-detecting a schema for every batch during normal processing would mean silently applying a translation the caller never asked for — exactly the kind of guessing this step's detection rules are designed to avoid. Wiring this in is left to a later step that deliberately designs how a batch's dataset is chosen; see `__init__.py`'s and `registry.py`'s docstrings.
 - **Adding a new dataset adapter** requires: writing a class implementing `DatasetAdapter` (a new file, following the existing three as examples) and appending an instance to `ADAPTERS` in `registry.py`. It requires no change to `ingestion.py`, `feature_extraction.py`, or `batch_processor.py` — verified by a dedicated test that checks none of those three files mention this package.
 
+## Dataset Feature Mapping
+
+```
+CanonicalDatasetRecord -> map_canonical_record() -> MappedFeatureSet
+```
+
+`app/services/feature_mapping.py` turns a `CanonicalDatasetRecord` (Step 18) into `MappedFeatureSet`: a deterministic, provenance-carrying, algorithm-agnostic ML input representation. **It does not train a model, generate a prediction, calculate an IDS metric, or fit a dataset-wide normalization parameter** — it only maps already-translated values into the canonical feature schema, the same way `feature_extraction.py` already does for ingestion's output.
+
+```python
+@dataclass(frozen=True)
+class MappedFeature:
+    canonical_name: str
+    value: float | int | None       # None whenever status is not PRESENT — never fabricated
+    status: FeatureStatus           # reused from feature_extraction: PRESENT/MISSING/MALFORMED/UNSUPPORTED
+    source_column: str | None       # the dataset's own column name this came from
+    raw_value: str | None           # the original, unparsed text
+
+@dataclass(frozen=True)
+class MappedFeatureSet:
+    row_number: int
+    dataset_schema: str                      # metadata only — never a feature
+    features: dict[str, MappedFeature]        # keyed by FEATURE_SCHEMA name
+    unknown_fields: dict[str, str]
+
+    def feature_vector(self) -> list[float | int | None]:
+        ...  # built from FEATURE_SCHEMA's order, always
+```
+
+- **Single source of truth, reused directly.** This module defines no feature schema of its own and performs no independent type parsing. Each canonical field's raw text is parsed via `feature_extraction.parse_canonical_field(canonical_name, text)` — a small, new, *additive* public function that dispatches by canonical name directly (bypassing `extract_raw_features()`'s raw-dataset-column alias matching, which does not apply to already-canonical input and would silently misclassify several canonical names — like `backward_byte_count` — as unrecognized, since they are not themselves listed as one of their own input aliases). The numeric encodings, `FEATURE_SCHEMA` order, and `FeatureStatus` vocabulary are exactly Steps 16/17's, not reinvented.
+- **No dataset-specific branching.** This module has no knowledge of NSL-KDD, UNSW-NB15, CICIDS, or any other dataset family — verified by a dedicated test that scans its functions' source for dataset-name literals and `if dataset ==`-style branches. All dataset-specific knowledge stays one layer upstream, in `app/services/dataset_adapters/`.
+- **Missing, malformed and unsupported stay distinguishable.** A canonical feature with no source column at all is `MISSING` (`value=None`, `source_column=None`); a column that exists but fails to parse (invalid IP, invalid port, non-numeric or negative count, ...) is `MALFORMED` (`value=None`, but `source_column`/`raw_value` are still populated, so the bad input stays traceable); a value this project has no deterministic encoding for yet (e.g. an unrecognized protocol name) is `UNSUPPORTED`. None of the three is ever coerced into `0` or any other plausible-looking value.
+- **Unknown dataset columns are preserved, not discarded.** Every column the adapter layer did not recognize at all reaches `MappedFeatureSet.unknown_fields`, verbatim — passed straight through from `CanonicalDatasetRecord.unknown_fields`. A dataset's extra columns never corrupt the canonical feature set.
+- **Labels never become features.** `label`/`attack_category` are not present on `MappedFeatureSet` at all (there is no such attribute), because `CanonicalDatasetRecord.canonical_fields` never contains them in the first place — the adapter layer routes them separately before this module ever sees a row. Neither can appear in `features`, `feature_vector()`, or as any feature's `source_column`/`raw_value` — verified directly by tests using real label/category text.
+- **No other form of data leakage.** `dataset_schema` and `row_number` are kept as metadata fields on `MappedFeatureSet`, outside `features` and `feature_vector()` — the same pattern `NormalizedFlowFeatures` already uses for `row_number`. There is no batch ID or filename anywhere in this pipeline (`NetworkFlowRecord`/`CanonicalDatasetRecord` never carry either), so neither can leak into a feature vector by construction.
+- **Deterministic ordering, independent of source-column order.** `feature_vector()` is always built by walking `FEATURE_SCHEMA`, never CSV column order, dict insertion order, or an adapter's internal mapping order — verified with two records whose source columns are given in opposite orders, producing identical output.
+- **No dataset-wide fitting.** `map_canonical_record()` takes a single `CanonicalDatasetRecord` and nothing else — no scaler, no fitted parameters, no access to any other record. It cannot compute a mean, standard deviation, or dataset-wide min/max even in principle, because it never sees more than one row.
+- **Not persisted, not wired into batch processing.** `MappedFeatureSet` is an in-memory value only — no new database table exists for it, and `batch_processor.py` does not call this module (it is not called from anywhere in the live request path yet, for the same reason `dataset_adapters` and `dataset_profiling` are not: there is still no mechanism for a batch to declare or select a dataset). A later step that does is responsible for wiring ingestion → adapter selection → this module → model inference together.
+
 ## Dataset Profiling
 
 ```
@@ -380,6 +418,7 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 - No ML training/inference, detection results, or dashboard logic exists yet. A batch's CSV is now read, validated, and feature-extracted into `NormalizedFlowFeatures` during processing, but no model runs on them — nothing is actually analyzed and no batch reaches `completed` yet.
 - A dataset-adapter layer exists (`app/services/dataset_adapters/`) that can translate NSL-KDD/UNSW-NB15/CICIDS-style CSV schemas into a canonical representation, but it is not called during batch processing — there is no mechanism yet for a batch to declare or select a dataset.
 - A dataset-profiling service exists (`app/services/dataset_profiling/`) that can produce a structural/statistical profile of a stored batch's CSV, but it is not called during batch processing or exposed over the API yet — it is a standalone, independently-tested service.
+- A dataset feature-mapping layer exists (`app/services/feature_mapping.py`) that can turn a `CanonicalDatasetRecord` into a deterministic, provenance-carrying `MappedFeatureSet`, but it is not called during batch processing yet — it is a standalone, independently-tested service, same as the adapter and profiling layers above.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.

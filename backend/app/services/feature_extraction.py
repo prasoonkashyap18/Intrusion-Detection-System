@@ -383,6 +383,48 @@ def _parse_non_negative_number(text: str) -> tuple[float | None, FeatureStatus]:
     return value, FeatureStatus.PRESENT
 
 
+def parse_canonical_field(canonical_name: str, raw_text: str) -> tuple[float | int | None, FeatureStatus]:
+    """Parses one pre-encoding canonical field's raw text directly, by its
+    canonical name (one of `CANONICAL_COLUMN_NAMES`) — the same per-type
+    parsing `extract_raw_features` applies internally, without that
+    function's alias-matching step (which expects a raw *dataset* column
+    name like `"srcip"`/`"bwd_bytes"`, not an already-canonical one).
+
+    For callers that already have a value keyed by its canonical name —
+    notably `app.services.feature_mapping`, reading `CanonicalDatasetRecord
+    .canonical_fields` — and need to parse it exactly the way
+    `extract_raw_features` would have, without re-deriving the alias
+    lookup (which would silently fail for canonical names, like
+    `"backward_byte_count"`, that are not themselves one of their own
+    aliases in `_COLUMN_ALIASES`).
+
+    For `"source_ip"`/`"destination_ip"`/`"protocol"`, the returned value/
+    status corresponds to that field's *encoded* `FEATURE_SCHEMA`
+    counterpart (`source_ip_numeric`/`destination_ip_numeric`/
+    `protocol_number`) — exactly what `extract_raw_features` itself
+    produces for the same input text. Raises `ValueError` for a name
+    outside `CANONICAL_COLUMN_NAMES` — a programming error in the caller,
+    never a possible outcome of parsing untrusted CSV data.
+    """
+    if canonical_name not in CANONICAL_COLUMN_NAMES:
+        raise ValueError(f"{canonical_name!r} is not a recognized canonical field name")
+
+    text = raw_text.strip()
+    if canonical_name in ("source_ip", "destination_ip"):
+        ip_text, status = _parse_ip_for_status(text)
+        if ip_text is None:
+            return None, status
+        return float(int(ipaddress.ip_address(ip_text))), status
+    if canonical_name == "protocol":
+        _, number, status = _parse_protocol(text)
+        return number, status
+    if canonical_name in _PORT_FEATURES:
+        return _parse_port(text)
+    if canonical_name == "tcp_flags":
+        return _parse_tcp_flags(text)
+    return _parse_non_negative_number(text)  # the remaining _NUMERIC_FEATURES
+
+
 def normalize_features(raw: RawFeatureSet, scaler: FeatureScaler | None = None) -> NormalizedFlowFeatures:
     """Turns a `RawFeatureSet` into the model-ready `NormalizedFlowFeatures`.
 
