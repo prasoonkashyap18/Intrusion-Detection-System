@@ -1,6 +1,7 @@
 import { Check, Copy, ShieldQuestion, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useBatchDetail } from '../../hooks/useBatchDetail'
+import { useBatchProcessing } from '../../hooks/useBatchProcessing'
 import type { DetectionBatch } from '../../types/detection'
 import { formatCount, formatLocalDateTime, formatUtcDateTime } from '../../utils/format'
 import { EmptyState, ErrorState, LoadingState } from '../states'
@@ -65,7 +66,7 @@ export function BatchDetailDialog({ batchId, onClose }: BatchDetailDialogProps) 
 
         <div className="mt-6">
           {detail.data ? (
-            <BatchDetailBody batch={detail.data} />
+            <BatchDetailBody batch={detail.data} onProcessed={detail.refresh} />
           ) : detail.failure ? (
             <ErrorState
               title={detail.failure.notFound ? 'Batch not found' : 'Unable to load this batch'}
@@ -81,9 +82,10 @@ export function BatchDetailDialog({ batchId, onClose }: BatchDetailDialogProps) 
   )
 }
 
-function BatchDetailBody({ batch }: { batch: DetectionBatch }) {
+function BatchDetailBody({ batch, onProcessed }: { batch: DetectionBatch; onProcessed: () => void }) {
   const status = STATUS_PRESENTATION[batch.status]
   const [copied, setCopied] = useState(false)
+  const processing = useBatchProcessing(batch.batch_id, onProcessed)
 
   const copyBatchId = useCallback(() => {
     navigator.clipboard
@@ -106,6 +108,23 @@ function BatchDetailBody({ batch }: { batch: DetectionBatch }) {
           <span className="text-graphite-500"> · {status.meaning}</span>
         </p>
       </div>
+
+      {(batch.status === 'pending' || batch.status === 'processing') && (
+        <div className="flex flex-col gap-2">
+          <Button
+            variant="primary"
+            onClick={processing.start}
+            disabled={batch.status === 'processing' || processing.isStarting}
+          >
+            {batch.status === 'processing' ? 'Processing…' : processing.isStarting ? 'Starting…' : 'Start Processing'}
+          </Button>
+          {processing.failure && (
+            <p role="alert" className="text-xs text-accent-700">
+              {processing.failure.message}
+            </p>
+          )}
+        </div>
+      )}
 
       <dl className="grid grid-cols-3 gap-3">
         <StatTile label="Total records" value={formatCount(batch.total_records)} />

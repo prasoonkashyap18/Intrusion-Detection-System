@@ -192,6 +192,99 @@ describe('BatchDetailDialog — dismissal', () => {
   })
 })
 
+describe('BatchDetailDialog — starting processing', () => {
+  it('shows Start Processing for a pending batch', async () => {
+    stubBackend([batchItem({ batch_id: 'batch-1', status: 'pending' })])
+
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByRole('button', { name: 'Start Processing' })).toBeEnabled()
+  })
+
+  it('calls the real processing endpoint and updates the displayed status', async () => {
+    stubBackend([batchItem({ batch_id: 'batch-1', status: 'pending' })])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByRole('button', { name: 'Start Processing' })
+
+    await user.click(screen.getByRole('button', { name: 'Start Processing' }))
+
+    await screen.findByText(/being processed/)
+    expect(screen.queryByRole('button', { name: 'Start Processing' })).not.toBeInTheDocument()
+  })
+
+  it('disables the action while the request is in flight', async () => {
+    const batch = batchItem({ batch_id: 'batch-1', status: 'pending' })
+    let resolveProcess: (() => void) | undefined
+    stubFetch((input) => {
+      if (String(input).endsWith('/process')) {
+        return new Promise((resolve) => {
+          resolveProcess = () => resolve(jsonResponse({ batch_id: 'batch-1', status: 'processing', message: 'ok' }))
+        })
+      }
+      return Promise.resolve(jsonResponse(batch))
+    })
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    const button = await screen.findByRole('button', { name: 'Start Processing' })
+
+    await user.click(button)
+
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled()
+
+    resolveProcess?.()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Starting…' })).not.toBeInTheDocument())
+  })
+
+  it('does not offer Start Processing for a completed batch', async () => {
+    stubBackend([batchItem({ batch_id: 'batch-1', status: 'completed', completed_at: '2026-10-03T09:00:00Z' })])
+
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+
+    await screen.findByText(/processing finished/)
+    expect(screen.queryByRole('button', { name: /start processing/i })).not.toBeInTheDocument()
+  })
+
+  it('does not offer Start Processing for a failed batch', async () => {
+    stubBackend([batchItem({ batch_id: 'batch-1', status: 'failed' })])
+
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+
+    await screen.findByText(/processing failed/)
+    expect(screen.queryByRole('button', { name: /start processing/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a clean failure message when starting processing fails, without raw exception text', async () => {
+    const batch = batchItem({ batch_id: 'batch-1', status: 'pending' })
+    stubFetch((input) => {
+      if (String(input).endsWith('/process')) {
+        return Promise.resolve(jsonResponse({ error: 'invalid_batch_state', message: 'Batch is already processing.' }, 409))
+      }
+      return Promise.resolve(jsonResponse(batch))
+    })
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+
+    await user.click(await screen.findByRole('button', { name: 'Start Processing' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Batch is already processing.')
+    expect(alert.textContent).not.toMatch(/invalid_batch_state|exception|traceback/i)
+    // The button stays usable: this is a conflict the user can see and retry, not a crash.
+    expect(screen.getByRole('button', { name: 'Start Processing' })).toBeEnabled()
+  })
+
+  it('shows no fake IDS metrics once processing has started', async () => {
+    stubBackend([batchItem({ batch_id: 'batch-1', status: 'pending' })])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: 'Start Processing' }))
+
+    await screen.findByText(/being processed/)
+    expect(dialog().textContent).not.toMatch(/threat|attack|risk|confidence|severity|score|%/i)
+  })
+})
+
 describe('BatchDetailDialog — accessibility', () => {
   it('names the dialog from its visible heading', async () => {
     stubBackend([batchItem({ batch_id: 'batch-1', filename: 'named.csv' })])

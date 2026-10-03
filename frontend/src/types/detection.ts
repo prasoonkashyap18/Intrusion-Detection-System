@@ -35,3 +35,16 @@ export interface Pagination {
 export interface DetectionBatchListResponse extends Pagination {
   items: DetectionBatch[]
 }
+
+/**
+ * Response of `POST /api/v1/detection/batches/{batchId}/process`. `status` is
+ * the batch's actual resulting state — `processing` once started, or `failed`
+ * if it could not even start (e.g. its upload file is missing). No ML
+ * inference runs here, so this never carries predictions, confidence,
+ * severity or risk scores.
+ */
+export interface BatchProcessingResponse {
+  batch_id: string
+  status: ProcessingStatus
+  message: string
+}

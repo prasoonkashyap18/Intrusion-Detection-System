@@ -12,8 +12,15 @@ from app.core.config import settings
 from app.core.errors import ApiException
 from app.db.database import get_db
 from app.models.detection_batch import DetectionBatch
-from app.schemas.batch import DetectionBatchListResponse, DetectionBatchSummary, UploadBatchResponse
+from app.models.enums import ProcessingStatus
+from app.schemas.batch import (
+    BatchProcessingResponse,
+    DetectionBatchListResponse,
+    DetectionBatchSummary,
+    UploadBatchResponse,
+)
 from app.schemas.common import ErrorResponse
+from app.services.batch_processor import start_processing
 from app.services.batch_service import get_batch, list_batches
 from app.services.upload_service import UploadConfig, register_upload
 
@@ -131,3 +138,39 @@ def get_detection_batch(
     db: Session = Depends(get_db),
 ) -> DetectionBatchSummary:
     return _summarize(get_batch(db, batch_id))
+
+
+_PROCESSING_MESSAGES = {
+    ProcessingStatus.PROCESSING: "Batch processing started.",
+    ProcessingStatus.FAILED: "Batch processing could not be started.",
+}
+
+
+@router.post(
+    "/batches/{batch_id}/process",
+    response_model=BatchProcessingResponse,
+    summary="Start processing a pending detection batch",
+    description=(
+        "Claims a pending batch and transitions it to `processing`, the boundary where a "
+        "future step's CSV parsing, feature extraction and ML inference will run. This "
+        "endpoint performs no analysis itself: no DetectionResult rows are created, and "
+        "processed/failed record counts are left at zero."
+    ),
+    responses={
+        404: {"model": ErrorResponse, "description": "No batch exists with that ID"},
+        409: {"model": ErrorResponse, "description": "The batch is not pending and cannot be started"},
+        422: {"model": ErrorResponse, "description": "batch_id is not a valid UUID"},
+        500: {"model": ErrorResponse, "description": "Processing could not be started"},
+    },
+)
+def start_detection_batch_processing(
+    batch_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    config: UploadConfig = Depends(get_upload_config),
+) -> BatchProcessingResponse:
+    batch = start_processing(db, batch_id, config.directory)
+    return BatchProcessingResponse(
+        batch_id=batch.id,
+        status=batch.status,
+        message=_PROCESSING_MESSAGES[batch.status],
+    )

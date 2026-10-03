@@ -46,6 +46,22 @@ class DetectionBatchSummary(UploadBatchResponse):
         return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
 
 
+class BatchProcessingResponse(BaseModel):
+    """Result of a request to start processing a batch.
+
+    `status` reflects the batch's actual resulting state: `processing` once
+    the placeholder boundary has run, or `failed` if it could not even start
+    (for example, the uploaded file is missing). This step performs no CSV
+    parsing or ML inference, so the response never includes prediction
+    counts, confidence, severity or risk scores — there is nothing truthful
+    to report yet.
+    """
+
+    batch_id: uuid.UUID
+    status: ProcessingStatus
+    message: str
+
+
 class DetectionBatchListResponse(BaseModel):
     """One page of batches, newest first. An empty collection is a normal
     200 response with `items: []` and `total_pages: 0`."""

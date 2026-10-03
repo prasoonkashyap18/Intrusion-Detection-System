@@ -1,4 +1,5 @@
 from app.schemas.batch import (
+    BatchProcessingResponse,
     DetectionBatchListResponse,
     DetectionBatchSummary,
     UploadBatchResponse,
@@ -12,6 +13,7 @@ __all__ = [
     "UploadBatchResponse",
     "DetectionBatchListResponse",
     "DetectionBatchSummary",
+    "BatchProcessingResponse",
     "ErrorResponse",
     "PageInfo",
     "DetectionResultBase",

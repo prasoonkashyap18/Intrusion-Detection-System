@@ -189,6 +189,43 @@ Returns one persisted batch by id, exactly as stored — the same shape as an it
 - `batch_id` is typed as a UUID path parameter, so FastAPI rejects a malformed id with `422` before any database lookup runs.
 - The response never includes stored file paths or a batch's `error_message`.
 
+## Batch Processing Lifecycle
+
+```
+POST /api/v1/detection/batches/{batch_id}/process
+```
+
+Claims a pending batch and establishes the boundary a later step's CSV parsing, feature extraction and ML inference will run inside (`app/services/batch_processor.py`). **This step performs no analysis**: it does not read the CSV's rows, does not run a model, and creates no `DetectionResult` rows.
+
+**Lifecycle** (deliberately conservative — no other transitions exist):
+
+```
+pending -> processing -> completed   (completing is a future step's job)
+pending -> processing -> failed      (processing could not even start)
+```
+
+A batch reaches `failed` here only if its upload file is missing from disk or an unexpected error occurs while starting it — never because "analysis" failed, since none runs. A successfully claimed batch with its file present is left `processing`, not `completed`: marking it `completed` would claim analysis happened when it did not. `processed_records` and `failed_records` stay `0` throughout; nothing increments them until a real pipeline exists to earn that truthfully.
+
+| Status | Meaning |
+|---|---|
+| `200` | Request handled; body's `status` is the batch's true resulting state (`processing` or `failed`) |
+| `404 batch_not_found` | No batch exists with that id |
+| `409 invalid_batch_state` | The batch is not `pending` (already processing, completed, or failed) |
+| `422 invalid_request` | `batch_id` is not a valid UUID |
+| `500 processing_unavailable` | The claim could not be written to the database |
+
+```json
+{
+  "batch_id": "3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30",
+  "status": "processing",
+  "message": "Batch processing started."
+}
+```
+
+**Concurrency.** The `pending -> processing` transition is one atomic `UPDATE detection_batches SET status = 'processing' WHERE id = :id AND status = 'pending'` (`claim_for_processing`), committed immediately, with the result read from `rowcount` rather than a separate SELECT beforehand. Two requests that both observe `pending` cannot both win: only one UPDATE's `WHERE` clause can still match once the other has committed, so the loser's statement affects zero rows and the service raises `409` instead of double-claiming the batch.
+
+**Where Step 15 plugs in:** `_run_placeholder_processing()` in `batch_processor.py` is a documented no-op today. A later step replaces its body with CSV parsing, feature extraction and model inference, writing `DetectionResult` rows and updating `processed_records`/`failed_records` as real rows are analyzed, and is responsible for the `processing -> completed` transition this step intentionally does not make.
+
 ## API Schemas
 
 Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — what requests/responses look like at the HTTP boundary — and are kept **independent of the SQLAlchemy ORM models** (`backend/app/models/`). This separation means the API contract and the database schema can evolve independently.
@@ -211,8 +248,8 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 
 ## Current Limitations
 
-- No ML training/inference, detection results, or dashboard logic exists yet. Uploaded CSVs are registered as `pending` batches and are not analyzed.
+- No ML training/inference, detection results, or dashboard logic exists yet. A batch can be moved to `processing`, but no CSV parsing or model runs, so nothing is actually analyzed and no batch reaches `completed` yet.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Four public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload`, `GET /api/v1/detection/batches` and `GET /api/v1/detection/batches/{batch_id}`.
+- Five public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload`, `GET /api/v1/detection/batches`, `GET /api/v1/detection/batches/{batch_id}` and `POST /api/v1/detection/batches/{batch_id}/process`.

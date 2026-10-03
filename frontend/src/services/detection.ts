@@ -1,4 +1,4 @@
-import type { DetectionBatch, DetectionBatchListResponse, UploadBatchResponse } from '../types/detection'
+import type { BatchProcessingResponse, DetectionBatch, DetectionBatchListResponse, UploadBatchResponse } from '../types/detection'
 import type { ProcessingStatus } from '../types/security'
 import { request } from './api'
 import { API_V1_PREFIX, UPLOAD_TIMEOUT_MS } from './config'
@@ -36,6 +36,20 @@ function isDetectionBatch(value: unknown): value is DetectionBatch {
     isUploadBatchResponse(value) &&
     'completed_at' in value &&
     (value.completed_at === null || typeof value.completed_at === 'string')
+  )
+}
+
+function isBatchProcessingResponse(value: unknown): value is BatchProcessingResponse {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'batch_id' in value &&
+    typeof value.batch_id === 'string' &&
+    'status' in value &&
+    typeof value.status === 'string' &&
+    (STATUSES as readonly string[]).includes(value.status) &&
+    'message' in value &&
+    typeof value.message === 'string'
   )
 }
 
@@ -88,6 +102,19 @@ export function getDetectionBatches(page: number, pageSize: number, signal?: Abo
 export function getDetectionBatch(batchId: string, signal?: AbortSignal): Promise<DetectionBatch> {
   return request(`${API_V1_PREFIX}/detection/batches/${encodeURIComponent(batchId)}`, {
     validate: isDetectionBatch,
+    signal,
+  })
+}
+
+/**
+ * POST /api/v1/detection/batches/{batchId}/process — claims a pending batch
+ * and starts the processing boundary. Performs no analysis: the resulting
+ * status is `processing` or `failed`, never a claim of completed analysis.
+ */
+export function startBatchProcessing(batchId: string, signal?: AbortSignal): Promise<BatchProcessingResponse> {
+  return request(`${API_V1_PREFIX}/detection/batches/${encodeURIComponent(batchId)}/process`, {
+    method: 'POST',
+    validate: isBatchProcessingResponse,
     signal,
   })
 }

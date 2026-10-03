@@ -146,6 +146,23 @@ DetectionBatchesPanel → BatchDetailDialog → useBatchDetail (hook) → getDet
 - **Identity safety:** switching which batch is selected never shows the previous batch's data under the new id — the hook masks stale results while the new request is in flight (`frontend/src/hooks/useBatchDetail.ts`).
 - **Dismissal:** the close button, Escape, or clicking outside all close the dialog (native `closedby="any"`); page scroll is locked while it is open, matching `MobileNavDrawer`'s existing pattern.
 - No detection results exist yet, so the dialog says so honestly rather than inventing a results section.
+- **Starting processing** is offered from this dialog — see below.
+
+## Batch Processing
+
+A `pending` batch shows a **Start Processing** button in its detail dialog. Activating it calls the real backend lifecycle endpoint and nothing else; it never simulates progress or invents a result.
+
+```
+BatchDetailDialog → useBatchProcessing (hook) → startBatchProcessing (service) → request() → FastAPI → SQLite
+```
+
+- **Pending:** "Start Processing" is enabled.
+- **While the request is in flight:** the button reads "Starting…" and is disabled, so a second click (or a second request racing the first) cannot happen from the UI. The backend's own atomic claim (see `backend/README.md`) is the real guard; this is defense in depth, not the only one.
+- **On success,** the hook calls back into `useBatchDetail`'s `refresh()` rather than holding its own copy of the batch — the dialog re-fetches the batch and displays whatever status the backend actually reports (`processing` or `failed`), so there is exactly one source of truth for what a batch's state is.
+- **Processing:** the button reads "Processing…" and stays disabled; a batch already underway does not offer to be started again.
+- **Completed or failed:** no "Start Processing" action is shown — the backend does not allow restarting either state yet, so offering the button would be misleading.
+- **On failure** (e.g. a `409` because the batch was already claimed elsewhere), the backend's own message is shown inline next to the button; never raw exception text.
+- This step never shows "Analyzing…", a threat count, a confidence value, a severity, or a risk score — none of that exists yet, and the UI does not pretend otherwise.
 
 ## UI State Components
 
@@ -239,8 +256,9 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 
 ## Current Limitations
 
-- Uploaded CSVs are registered but not analyzed. Detection results, analytics and model-performance views do not exist yet; those navigation sections are marked **Planned**.
-- Batches can be opened individually for detail, but the list itself does not poll — use Refresh.
+- Uploaded CSVs are registered and can be moved to `processing`, but nothing parses or analyzes them yet. Detection results, analytics and model-performance views do not exist yet; those navigation sections are marked **Planned**.
+- Batches can be opened individually for detail, and a pending one can be started, but the list itself does not poll — use Refresh.
+- A batch that reaches `processing` stays there; nothing in the UI or backend completes it yet (a future step's detection pipeline will).
 - Upload progress is indeterminate, because `fetch` offers no upload progress events.
 - Telemetry and pipeline panels are structural placeholders — they show no data because no analysis has run.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.

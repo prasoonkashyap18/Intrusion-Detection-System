@@ -75,6 +75,7 @@ export function stubBackend(initial: DetectionBatch[] = []) {
     const url = new URL(String(input))
     const method = init?.method ?? 'GET'
     const detailMatch = /\/detection\/batches\/([^/]+)$/.exec(url.pathname)
+    const processMatch = /\/detection\/batches\/([^/]+)\/process$/.exec(url.pathname)
 
     if (url.pathname.endsWith('/detection/batches') && method === 'GET') {
       const page = Number(url.searchParams.get('page'))
@@ -98,6 +99,28 @@ export function stubBackend(initial: DetectionBatch[] = []) {
           ? jsonResponse(found)
           : jsonResponse({ error: 'batch_not_found', message: 'No batch was found with that ID.' }, 404),
       )
+    }
+
+    if (processMatch && method === 'POST') {
+      const batchId = decodeURIComponent(processMatch[1] ?? '')
+      const index = store.findIndex((batch) => batch.batch_id === batchId)
+      if (index === -1) {
+        return Promise.resolve(jsonResponse({ error: 'batch_not_found', message: 'No batch was found with that ID.' }, 404))
+      }
+      const batch = store[index] as DetectionBatch
+      if (batch.status !== 'pending') {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              error: 'invalid_batch_state',
+              message: `Batch is '${batch.status}' and cannot be started; only a pending batch can be processed.`,
+            },
+            409,
+          ),
+        )
+      }
+      store[index] = { ...batch, status: 'processing' }
+      return Promise.resolve(jsonResponse({ batch_id: batchId, status: 'processing', message: 'Batch processing started.' }))
     }
 
     if (url.pathname.endsWith('/detection/upload') && method === 'POST') {
