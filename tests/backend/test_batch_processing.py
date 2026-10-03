@@ -198,7 +198,7 @@ class TestUnexpectedProcessingFailure:
         def boom(_csv_path):
             raise RuntimeError("disk I/O error at C:\\secret\\path\\traffic.csv")
 
-        monkeypatch.setattr(batch_processor, "_ingest_batch_csv", boom)
+        monkeypatch.setattr(batch_processor, "_run_feature_extraction", boom)
         batch = with_uploaded_file(upload_dir, add_batch(db_session))
 
         response = client.post(url_for(batch.id))

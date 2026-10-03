@@ -195,16 +195,22 @@ Returns one persisted batch by id, exactly as stored — the same shape as an it
 POST /api/v1/detection/batches/{batch_id}/process
 ```
 
-Claims a pending batch and runs CSV ingestion — reading and validating the batch's CSV into the generic representation `app/services/ingestion.py` defines (see [CSV Ingestion](#csv-ingestion) below) — inside the boundary a later step's feature extraction and ML inference will also run (`app/services/batch_processor.py`). **This step performs no analysis**: it reads and validates the CSV's rows, but runs no model and creates no `DetectionResult` rows.
+Claims a pending batch and runs the full data-preparation pipeline — CSV ingestion followed by feature extraction — inside the processing boundary a later step's ML inference will also run in (`app/services/batch_processor.py`):
+
+```
+Upload -> ingestion -> NetworkFlowRecord -> feature extraction -> normalization -> waiting for detection
+```
+
+**This step performs no analysis.** It reads and validates the CSV's rows (see [CSV Ingestion](#csv-ingestion)) and turns each one into a normalized, model-ready feature representation (see [Feature Extraction and Normalization](#feature-extraction-and-normalization)) — but runs no model, makes no prediction, and creates no `DetectionResult` rows. **Feature extraction is not detection**: it describes what a row's data looks like, not what it means.
 
 **Lifecycle** (deliberately conservative — no other transitions exist):
 
 ```
 pending -> processing -> completed   (completing is a future step's job)
-pending -> processing -> failed      (processing could not even start, or its CSV failed to ingest)
+pending -> processing -> failed      (processing could not even start, or data preparation failed structurally)
 ```
 
-A batch reaches `failed` here if its upload file is missing from disk, its CSV fails to ingest (unreadable, no header, or a malformed/inconsistent row — see below), or an unexpected error occurs — never because "analysis" failed, since none runs. A batch whose CSV ingests cleanly is left `processing`, not `completed`: marking it `completed` would claim IDS analysis happened when only ingestion did, and the current status model has no state between the two. `processed_records` and `failed_records` stay `0` throughout; they mean *records detected*, not *rows ingested*, and nothing increments them until a real detection pipeline exists to earn that truthfully.
+A batch reaches `failed` here if its upload file is missing from disk, its CSV fails to ingest (unreadable, no header, or a malformed/inconsistent row — see below), or an unexpected error occurs during ingestion or feature extraction — never because "analysis" failed, since none runs. Critically, a batch does **not** fail merely because one row is missing an optional value, has a value feature extraction could not parse (`FeatureStatus.MALFORMED`), or uses an encoding this layer doesn't resolve yet (`FeatureStatus.UNSUPPORTED`): those are everyday outcomes in heterogeneous network-flow data, not errors, and a `MALFORMED`/`UNSUPPORTED` field is never treated as "an attack" or "a failed detection" — see `FeatureStatus` below. A batch that ingests and feature-extracts cleanly is left `processing`, not `completed`: marking it `completed` would claim IDS analysis happened when only data preparation did, and the current status model has no state between the two. `processed_records` and `failed_records` stay `0` throughout; they mean *records detected*, not *rows ingested or feature-extracted*, and nothing increments them until a real detection pipeline exists to earn that truthfully.
 
 | Status | Meaning |
 |---|---|
@@ -224,7 +230,13 @@ A batch reaches `failed` here if its upload file is missing from disk, its CSV f
 
 **Concurrency.** The `pending -> processing` transition is one atomic `UPDATE detection_batches SET status = 'processing' WHERE id = :id AND status = 'pending'` (`claim_for_processing`), committed immediately, with the result read from `rowcount` rather than a separate SELECT beforehand. Two requests that both observe `pending` cannot both win: only one UPDATE's `WHERE` clause can still match once the other has committed, so the loser's statement affects zero rows and the service raises `409` instead of double-claiming the batch.
 
-**Where a later step plugs in:** `_ingest_batch_csv()` in `batch_processor.py` currently does nothing with the `NetworkFlowRecord`s it reads beyond proving they all parse. `app/services/feature_extraction.py` (see [Feature Extraction and Normalization](#feature-extraction-and-normalization) below) already exists to turn each record into model-ready features, but is not yet wired into this boundary — a later step replaces this body to call it, run model inference, write `DetectionResult` rows and update `processed_records`/`failed_records` as real rows are analyzed, and is responsible for the `processing -> completed` transition this step intentionally does not make.
+**Streaming end to end.** `_run_feature_extraction()` iterates `ingest_batch()` directly and calls `extract_features()` on each record as it is produced — it never calls `list(ingest_batch(...))` or otherwise collects every row first. At most one `NetworkFlowRecord` and one `NormalizedFlowFeatures` are held at a time, for the same reason ingestion itself streams (see [CSV Ingestion](#csv-ingestion)): a large CSV's memory use stays bounded by one row, not by the file's row count.
+
+**Processing result.** `_run_feature_extraction()` returns an internal `ProcessingSummary` (`records_ingested`, `records_feature_extracted`, `feature_schema_version`) that is only ever logged server-side — never persisted, never returned through the API. Under this step's design the two counts are always equal on success: `extract_features()` never fails for an individual record's missing/malformed/unsupported field values (see below), so only a structural ingestion failure or a genuinely unexpected error can stop the loop early, and either of those fails the whole batch rather than leaving a partial count. There is accordingly no separate "records that could not be represented" counter — under the current design that number is always either 0 (success) or the batch is `failed` instead.
+
+**Why normalized features are not persisted.** `NormalizedFlowFeatures` stays an in-memory value, discarded once `_run_feature_extraction()` returns. No new database table was added for it: the existing architecture does not yet need one, since nothing downstream reads features back after processing — there is no detection step yet to consume them from storage, and no API response exposes them. Persisting the model input contract makes sense once a step exists that genuinely benefits from them outliving one request (replaying a batch through a newer model without re-reading its CSV, for example); introducing that table now would be speculative. Revisit this when that step is designed.
+
+**Where a later step plugs in:** `_run_feature_extraction()` in `batch_processor.py` currently discards every `NormalizedFlowFeatures` it produces — nothing is written anywhere. A later step replaces this function's body to run model inference against each `NormalizedFlowFeatures`, write `DetectionResult` rows, and update `processed_records`/`failed_records` as real rows are analyzed, and is responsible for the `processing -> completed` transition this step intentionally does not make.
 
 ## CSV Ingestion
 
@@ -251,7 +263,7 @@ class NetworkFlowRecord:
 - **Never fabricates a value.** A recognized column whose text cannot be safely interpreted (a non-numeric port, an invalid IP) leaves that field `None` rather than guessing or defaulting to `0`/`""`/`false` — the original text is still available in `raw_features`, so nothing is lost. Timestamp parsing is conservative: only an unambiguous ISO 8601 string is accepted.
 - **Structural errors fail the whole operation, not just one row.** A header with too few columns, no header at all, or a data row whose width does not match the header raises `ApiException` (`ingestion_invalid_csv`) rather than silently skipping the bad row — the same standard `upload_service.py`'s own validation already applies at upload time, so a file that reaches ingestion is expected to already satisfy it; this is defense in depth for whenever ingestion runs independently of that path. A missing or unreadable file raises `ingestion_file_missing` / `ingestion_unreadable`. Every error follows the project's existing `ApiException` pattern; messages are user-safe, and filesystem paths and stack traces are logged server-side only, never returned.
 - **Streaming.** `ingest_batch()` is a generator: it yields one `NetworkFlowRecord` per data row as the caller consumes it, so a large CSV's rows are never collected into a list in this module. Confirming the file's text encoding (reusing the same `utf-8-sig` → `latin-1` fallback as `csv_validation.py`) does read the file's bytes once upfront — encoding can only be confirmed by seeing the whole file decode, and deciding that mid-stream would mean silently re-yielding earlier rows a second time after restarting with a different encoding. That one bounded read (bounded by the same upload size limit already enforced at upload time) is what buys that correctness; the per-row parse after it is what stays lazy.
-- **No ML inference.** This module does not predict, classify, score, or create `DetectionResult` rows. `batch_processor.py`'s `_ingest_batch_csv()` currently exhausts the iterator and discards every record, which exists only to prove every row reads and validates — see "Where a later step plugs in" above for what replaces that body.
+- **No ML inference.** This module does not predict, classify, score, or create `DetectionResult` rows. Every record this module yields is now fed into feature extraction by `batch_processor.py`'s `_run_feature_extraction()` (see [Batch Processing Lifecycle](#batch-processing-lifecycle) and [Feature Extraction and Normalization](#feature-extraction-and-normalization)) — ingestion's own job stops at producing a valid `NetworkFlowRecord`.
 
 ## Feature Extraction and Normalization
 
@@ -259,7 +271,7 @@ class NetworkFlowRecord:
 NetworkFlowRecord -> extract_raw_features() -> RawFeatureSet -> normalize_features() -> NormalizedFlowFeatures
 ```
 
-`app/services/feature_extraction.py` turns a `NetworkFlowRecord` into `NormalizedFlowFeatures`: the input contract a future ML model step will consume. **It is not wired into the processing lifecycle yet** — nothing currently calls it from `batch_processor.py`; it exists as a standalone, independently-tested layer for that later step to call. It performs no machine learning: no prediction, classification, scoring, risk assessment, or `DetectionResult` row is produced here, and it has no knowledge of any particular ML algorithm.
+`app/services/feature_extraction.py` turns a `NetworkFlowRecord` into `NormalizedFlowFeatures`: the input contract a future ML model step will consume. **As of this step it is wired into the processing boundary**: `batch_processor.py`'s `_run_feature_extraction()` calls `extract_features()` (`extract_raw_features()` + `normalize_features()` composed) for every record ingestion yields. It performs no machine learning: no prediction, classification, scoring, risk assessment, or `DetectionResult` row is produced here, and it has no knowledge of any particular ML algorithm. The dependency direction is one-way and layered — `api/v1/detection.py` → `batch_processor.py` → `ingestion.py` → `feature_extraction.py` — so the API route and ingestion stay unaware of feature extraction's internals, and feature-extraction logic exists in exactly one place.
 
 ```python
 FEATURE_SCHEMA: tuple[str, ...] = (
@@ -309,7 +321,7 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 
 ## Current Limitations
 
-- No ML training/inference, detection results, or dashboard logic exists yet. A batch's CSV is read and structurally validated during processing, and a standalone feature-extraction layer (`app/services/feature_extraction.py`) can turn a `NetworkFlowRecord` into model-ready features, but that layer is not yet called during processing and no model runs — nothing is actually analyzed and no batch reaches `completed` yet.
+- No ML training/inference, detection results, or dashboard logic exists yet. A batch's CSV is now read, validated, and feature-extracted into `NormalizedFlowFeatures` during processing, but no model runs on them — nothing is actually analyzed and no batch reaches `completed` yet.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.

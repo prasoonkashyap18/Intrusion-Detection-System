@@ -51,6 +51,10 @@ from typing import Protocol
 
 from app.services.ingestion import NetworkFlowRecord
 
+# Bumped whenever FEATURE_SCHEMA's names, order or count changes, so a log
+# line or a future persisted artifact can record which schema produced it.
+FEATURE_SCHEMA_VERSION = "1"
+
 # Deterministic, explicit feature order. A model's input vector must be
 # built from this tuple (see `NormalizedFlowFeatures.feature_vector`), never
 # from dict iteration order, so adding a feature here is a conscious,
