@@ -173,8 +173,19 @@ _NUMERIC_FEATURES = (
     - _PORT_FEATURES
 )
 
+# The canonical, pre-encoding column-name vocabulary `_COLUMN_ALIASES` maps
+# onto (e.g. "source_ip", "flow_duration" — distinct from FEATURE_SCHEMA's
+# already-encoded names like "source_ip_numeric"). Exposed so other layers
+# — notably app.services.dataset_adapters — can target these exact names
+# without duplicating or drifting from this module's own vocabulary.
+CANONICAL_COLUMN_NAMES: frozenset[str] = frozenset(_COLUMN_ALIASES.values())
 
-def _normalize_column(name: str) -> str:
+
+def normalize_column_name(name: str) -> str:
+    """Case/whitespace-insensitive column-name matching, shared with
+    app.services.ingestion and app.services.dataset_adapters so the same
+    header text normalizes identically everywhere it is matched against an
+    alias table."""
     return "_".join(name.strip().lower().split())
 
 
@@ -250,7 +261,7 @@ def extract_raw_features(record: NetworkFlowRecord) -> RawFeatureSet:
     protocol: str | None = None
 
     for column, raw_value in record.raw_features.items():
-        target = _COLUMN_ALIASES.get(_normalize_column(column))
+        target = _COLUMN_ALIASES.get(normalize_column_name(column))
         text = raw_value.strip()
 
         if target is None:

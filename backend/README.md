@@ -296,8 +296,42 @@ class NormalizedFlowFeatures:
 - **Four explicit outcomes per feature** (`FeatureStatus`): `PRESENT` (parsed successfully), `MISSING` (no matching column, or an empty value — most datasets don't provide every concept), `MALFORMED` (a value was present but did not parse as the expected type, or violated an inherent constraint like a negative byte count or an out-of-range port — **never** silently turned into `0`/`""`/a guess), and `UNSUPPORTED` (syntactically valid data this module has no deterministic encoding for yet, e.g. a protocol name outside its small known table, or textual TCP flags like `"SF"` instead of a numeric bitmask — the original text is not discarded, it stays reachable on the source `NetworkFlowRecord`).
 - **Deterministic feature ordering.** `FEATURE_SCHEMA` is a fixed tuple, not a dict's iteration order. `NormalizedFlowFeatures.feature_vector()` builds the model input list from that tuple explicitly; extracting the same record twice always yields identical output (covered by a repeated-extraction test).
 - **IP and protocol representation.** A syntactically valid IPv4/IPv6 address is encoded as its standard integer form (`int(ipaddress.ip_address(...))`) — a deterministic, reversible encoding, not a threat or reputation judgment; this module makes no external network calls and assigns no risk to any address. A protocol is recognized by name or IANA number for a small set of common protocols (`icmp`/`tcp`/`udp`/`icmpv6`) via a fixed, never-invented lookup table; anything else is `UNSUPPORTED`, with its original text preserved as `protocol_name`.
-- **Dataset-independent.** No `if dataset == "..."` branch exists anywhere in this module. `_COLUMN_ALIASES` is a small, explicitly generic seed (duration, packet/byte counts, forward/backward stats, TCP flags, ...), matched case- and whitespace-insensitively; every unrecognized column survives, untouched, in `unknown_features`. A specific public dataset's own column names are left to a future dataset-adapter mechanism, not implemented here.
+- **Dataset-independent.** No `if dataset == "..."` branch exists anywhere in this module. `_COLUMN_ALIASES` is a small, explicitly generic seed (duration, packet/byte counts, forward/backward stats, TCP flags, ...), matched case- and whitespace-insensitively; every unrecognized column survives, untouched, in `unknown_features`. A specific public dataset's own column names are translated to this vocabulary by the dataset-adapter layer below, not by this module.
 - **Normalization is separated from extraction on purpose, and does nothing by default.** `extract_raw_features()` only type-parses; `normalize_features()` is the hook a future *fitted* scaler plugs into via the `FeatureScaler` protocol (`(feature_name, value) -> value`). This module does not compute or store any mean/std/min/max itself — doing so would require a representative dataset this layer does not have access to, and scaling parameters are a model-training concern, not a request-time one. Called with no scaler (today's only caller), `normalize_features()` is the identity transform. A scaler is applied only to `PRESENT` features; `MISSING`/`MALFORMED`/`UNSUPPORTED` features stay `None` regardless of any scaler, so normalization can never turn "we don't have this value" into a number.
+
+## Dataset Adapter Layer
+
+```
+NetworkFlowRecord -> DatasetAdapter.adapt() -> CanonicalDatasetRecord
+```
+
+`app/services/dataset_adapters/` translates a dataset's own CSV column names into this project's shared vocabulary, so `ingestion.py` and `feature_extraction.py` never need to know any individual public IDS dataset's column names. **It performs no ML training or inference, and no model/training/inference code of any kind exists in this layer** — it only renames columns and, when confidently recognized, reads out a label and attack category.
+
+**Why this exists.** Without it, supporting another dataset would mean adding `if dataset == "..."` branches somewhere in the core pipeline — exactly what Steps 15–17 were careful to avoid. The adapter layer isolates that dataset-specific knowledge into small, independent files instead.
+
+```python
+@dataclass(frozen=True)
+class CanonicalDatasetRecord:
+    row_number: int
+    dataset_schema: str                 # which adapter matched, e.g. "nsl-kdd-style"
+    source_record: NetworkFlowRecord    # the full original row, for traceability
+    canonical_fields: dict[str, str]    # renamed, still-raw text — e.g. {"source_ip": "10.0.0.1"}
+    column_mapping: dict[str, str]      # canonical name -> original source column name
+    unknown_fields: dict[str, str]      # every column the adapter didn't recognize, verbatim
+    label: str | None = None            # the dataset's own label text, when present
+    attack_category: str | None = None  # a separate category column's text, when present
+```
+
+- **Adapter interface** (`base.py`, `DatasetAdapter`): `schema_id` and `description` identify the adapter; `can_handle(header) -> bool` decides, from column names alone, whether this adapter recognizes a schema; `adapt(record) -> CanonicalDatasetRecord` performs the translation. Implementations are small, stateless, and independent of each other.
+- **Detection is schema-based, never identity-based.** `can_handle` looks only at header column names — never at a user-supplied "dataset" string, a filename, or file content — so a request cannot simply claim to be a dataset it isn't. Each adapter requires several of its most distinctive column names together (e.g. NSL-KDD: `protocol_type`+`service`+`flag`+`src_bytes`+`dst_bytes`); a single generic name like "protocol" is never sufficient on its own.
+- **Selection never guesses** (`registry.select_adapter`). It tries every registered adapter's `can_handle` and returns the unique match. If zero adapters recognize a header, or more than one does (an ambiguous overlap), the result's `adapter` is `None` — `is_unsupported`/`is_ambiguous` distinguish the two cases for logging, but neither falls back to picking an adapter anyway.
+- **Supported schemas today:** `nsl-kdd-style`, `unsw-nb15-style`, `cicids-style` (see each adapter's own module docstring for its exact detection signature and which columns it maps). Mapping confidence varies deliberately by dataset: NSL-KDD and UNSW-NB15 have long-stable, well-documented column layouts and are mapped fairly completely for the columns this project has a canonical equivalent for; CICIDS varies across releases, so its adapter maps only the small subset of columns consistently present everywhere and leaves the rest — the majority of its much larger column set — as `unknown_fields` rather than guessed at.
+- **No destructive feature selection.** A dataset's columns with no canonical equivalent (NSL-KDD's `serror_rate`, `dst_host_count`, and the many other derived-rate/host-count columns; most of CICIDS' 70+ statistical features) are preserved verbatim in `unknown_fields`, not discarded. Adapters are a translation layer, not a filter.
+- **Labels are preserved, never interpreted.** `label`/`attack_category` hold the dataset's own text exactly as written (`"neptune"`, `"0"`, `"BENIGN"`, `"Exploits"`, ...). Nothing in this layer normalizes a label to "benign"/"attack", infers one from an unrelated column, or defaults a missing one to anything — a missing label column simply leaves `label` as `None`. This is translation, not classification.
+- **Raw-value traceability.** `canonical_fields` holds copied, unparsed text (no type conversion — that stays `feature_extraction.py`'s job, so this layer never duplicates it); `column_mapping` records which original column each canonical field came from; `source_record` keeps the complete original row. A canonical field can always be traced back to exactly which CSV column produced it.
+- **Performance.** `can_handle` takes only a header (a list of column names) — selecting an adapter never requires reading a CSV's data rows, duplicating the ingestion parse, or loading a file into memory.
+- **Not wired into batch processing.** `batch_processor.py` does not call this layer. There is currently no mechanism for a batch to declare or select a dataset (no API field, no stored attribute on `DetectionBatch`), and auto-detecting a schema for every batch during normal processing would mean silently applying a translation the caller never asked for — exactly the kind of guessing this step's detection rules are designed to avoid. Wiring this in is left to a later step that deliberately designs how a batch's dataset is chosen; see `__init__.py`'s and `registry.py`'s docstrings.
+- **Adding a new dataset adapter** requires: writing a class implementing `DatasetAdapter` (a new file, following the existing three as examples) and appending an instance to `ADAPTERS` in `registry.py`. It requires no change to `ingestion.py`, `feature_extraction.py`, or `batch_processor.py` — verified by a dedicated test that checks none of those three files mention this package.
 
 ## API Schemas
 
@@ -322,6 +356,7 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 ## Current Limitations
 
 - No ML training/inference, detection results, or dashboard logic exists yet. A batch's CSV is now read, validated, and feature-extracted into `NormalizedFlowFeatures` during processing, but no model runs on them — nothing is actually analyzed and no batch reaches `completed` yet.
+- A dataset-adapter layer exists (`app/services/dataset_adapters/`) that can translate NSL-KDD/UNSW-NB15/CICIDS-style CSV schemas into a canonical representation, but it is not called during batch processing — there is no mechanism yet for a batch to declare or select a dataset.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
