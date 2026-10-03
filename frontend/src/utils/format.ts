@@ -31,7 +31,17 @@ export function formatCount(value: number): string {
   return value.toLocaleString('en-US')
 }
 
-/** YYYY-MM-DD HH:mm:ss UTC from an ISO timestamp; returns the input unchanged if it is not a valid date. */
+/** Readable local-time stamp, e.g. "03 Oct 2026, 02:45 PM". Returns the input unchanged if it is not a valid date. */
+export function formatLocalDateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = date.toLocaleString('en-US', { month: 'short' })
+  const time = date.toLocaleString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+  return `${day} ${month} ${date.getFullYear()}, ${time}`
+}
+
+/** Exact UTC instant for tooltips, e.g. "2026-10-03 08:15:30 UTC". */
 export function formatUtcDateTime(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso

@@ -1,6 +1,6 @@
 # Backend
 
-The FastAPI backend for AI-IDS. It currently exposes a health check and a CSV upload endpoint that registers a pending detection batch. ML inference, detection results, and dashboard endpoints are not implemented yet; see [ARCHITECTURE.md](../ARCHITECTURE.md) for the planned design.
+The FastAPI backend for AI-IDS. It currently exposes a health check, a CSV upload endpoint that registers a pending detection batch, and a paginated batch listing. ML inference, detection results, and dashboard endpoints are not implemented yet; see [ARCHITECTURE.md](../ARCHITECTURE.md) for the planned design.
 
 ## Technology Used
 
@@ -130,6 +130,47 @@ No dataset-specific columns are required: "valid" means structurally valid. Data
 - The upload is a synchronous request; very large files hold a worker thread while they are copied and scanned.
 - No authentication, rate limiting or virus scanning.
 
+## Listing Batches
+
+```
+GET /api/v1/detection/batches?page=1&page_size=20
+```
+
+Returns persisted batches from SQLite, **newest first** (`ORDER BY created_at DESC, id DESC`, so ties never overlap across pages). Paging is done in SQL with `LIMIT/OFFSET`, plus one `COUNT` query: two queries per request, no relationships loaded.
+
+| Parameter | Default | Limits |
+|---|---|---|
+| `page` | `1` | 1-based, `1`–`1,000,000` |
+| `page_size` | `20` | `1`–`100` |
+
+Out-of-range or non-numeric values return `422 invalid_request`. A page beyond the last returns `200` with empty `items` and the real totals.
+
+```json
+{
+  "items": [
+    {
+      "batch_id": "3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30",
+      "filename": "traffic.csv",
+      "status": "pending",
+      "total_records": 1234,
+      "processed_records": 0,
+      "failed_records": 0,
+      "created_at": "2026-10-03T08:15:30Z",
+      "completed_at": null
+    }
+  ],
+  "page": 1,
+  "page_size": 20,
+  "total_items": 42,
+  "total_pages": 3
+}
+```
+
+- An empty database is a normal `200` with `items: []` and `total_pages: 0` — never `404` — so clients can tell "no batches" from "could not reach the API".
+- Statuses are reported exactly as stored. `pending` means registered and waiting for processing; nothing in this endpoint changes a batch's status.
+- The response never includes stored file paths or a batch's `error_message`. A database failure returns `500 batches_unavailable` with a generic message (details are logged only).
+- The generic `PageInfo` schema was not used: it describes offset/limit, while this endpoint reports page-number metadata.
+
 ## API Schemas
 
 Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — what requests/responses look like at the HTTP boundary — and are kept **independent of the SQLAlchemy ORM models** (`backend/app/models/`). This separation means the API contract and the database schema can evolve independently.
@@ -148,13 +189,13 @@ From the repository root, with the backend virtual environment activated:
 python -m pytest tests/backend -v
 ```
 
-Database and upload tests use an isolated in-memory SQLite database and a temporary upload directory; they never touch the real development database or `backend/data/uploads/`.
+Database, upload and batch-listing tests use an isolated in-memory SQLite database and a temporary upload directory; they never touch the real development database or `backend/data/uploads/`.
 
 ## Current Limitations
 
 - No ML training/inference, detection results, or dashboard logic exists yet. Uploaded CSVs are registered as `pending` batches and are not analyzed.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
-- There is no endpoint to list or fetch stored batches yet.
+- There is no endpoint to fetch a single batch yet (listing only).
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Two public endpoints exist: `GET /api/v1/health` and `POST /api/v1/detection/upload`.
+- Three public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload` and `GET /api/v1/detection/batches`.

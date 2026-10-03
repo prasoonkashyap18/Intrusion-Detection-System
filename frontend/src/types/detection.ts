@@ -15,3 +15,23 @@ export interface UploadBatchResponse {
   /** ISO 8601 timestamp in UTC. */
   created_at: string
 }
+
+/** A persisted batch as listed by `GET /api/v1/detection/batches`. */
+export interface DetectionBatch extends UploadBatchResponse {
+  /** ISO 8601 UTC timestamp; null until a processing step finishes the batch. */
+  completed_at: string | null
+}
+
+export interface Pagination {
+  /** 1-based. */
+  page: number
+  page_size: number
+  total_items: number
+  /** 0 when there are no items. */
+  total_pages: number
+}
+
+/** One page of batches, newest first. An empty collection is a normal response. */
+export interface DetectionBatchListResponse extends Pagination {
+  items: DetectionBatch[]
+}

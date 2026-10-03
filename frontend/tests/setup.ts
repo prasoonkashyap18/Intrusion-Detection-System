@@ -3,6 +3,9 @@ import { cleanup } from '@testing-library/react'
 import { afterEach, beforeEach } from 'vitest'
 import { stubMatchMedia } from './helpers'
 
+// Local-time formatting is asserted exactly, so pin the timezone.
+process.env.TZ = 'UTC'
+
 // Tests import Vitest helpers explicitly (globals are off), so React Testing
 // Library's automatic cleanup is not registered for us.
 afterEach(cleanup)

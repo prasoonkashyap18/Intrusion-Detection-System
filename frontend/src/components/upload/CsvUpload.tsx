@@ -4,7 +4,7 @@ import { useCsvUpload } from '../../hooks/useCsvUpload'
 import { MAX_UPLOAD_BYTES } from '../../services'
 import type { UploadBatchResponse } from '../../types/detection'
 import { cn } from '../../utils/cn'
-import { formatBytes, formatCount, formatUtcDateTime } from '../../utils/format'
+import { formatBytes, formatCount, formatLocalDateTime, formatUtcDateTime } from '../../utils/format'
 import { ErrorState, LoadingState } from '../states'
 import { Button } from '../ui/Button'
 import { StatusDot } from '../ui/StatusDot'
@@ -235,7 +235,9 @@ function UploadSuccess({ batch, onUploadAnother }: { batch: UploadBatchResponse;
           </span>
         </Detail>
         <Detail label="Registered">
-          <span className="font-mono text-xs tabular-nums">{formatUtcDateTime(batch.created_at)}</span>
+          <time dateTime={batch.created_at} title={formatUtcDateTime(batch.created_at)} className="tabular-nums">
+            {formatLocalDateTime(batch.created_at)}
+          </time>
         </Detail>
       </dl>
 

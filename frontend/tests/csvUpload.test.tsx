@@ -296,7 +296,7 @@ describe('CsvUpload — success', () => {
     expect(status).toHaveTextContent('traffic.csv')
     expect(status).toHaveTextContent('1,234')
     expect(status).toHaveTextContent('pending')
-    expect(status).toHaveTextContent('2026-10-03 08:15:30 UTC')
+    expect(status).toHaveTextContent('03 Oct 2026, 08:15 AM')
     expect(onUploaded).toHaveBeenCalledExactlyOnceWith(batchResponse())
   })
 

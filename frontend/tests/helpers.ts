@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { UploadBatchResponse } from '@/types/detection'
+import type { DetectionBatch, UploadBatchResponse } from '@/types/detection'
 
 /** jsdom has no matchMedia; components query it for reduced-motion and pointer type. */
 export function stubMatchMedia(prefersReducedMotion = false) {
@@ -55,4 +55,66 @@ export function sentFile(init: FetchInit | undefined): File {
   const value = init?.body?.get('file')
   if (!(value instanceof File)) throw new Error('Request did not include a file')
   return value
+}
+
+export function batchItem(overrides: Partial<DetectionBatch> = {}): DetectionBatch {
+  return { ...batchResponse(), completed_at: null, ...overrides }
+}
+
+/**
+ * A stateful stand-in for the backend's two detection endpoints, used only in
+ * tests. It pages newest-first like the real endpoint, and uploads add a batch
+ * to the same store, so tests can prove the UI reads persisted data rather
+ * than holding its own copy.
+ */
+export function stubBackend(initial: DetectionBatch[] = []) {
+  const store: DetectionBatch[] = [...initial] // newest first
+  let uploads = 0
+
+  const fetchMock = stubFetch((input, init) => {
+    const url = new URL(String(input))
+    const method = init?.method ?? 'GET'
+
+    if (url.pathname.endsWith('/detection/batches') && method === 'GET') {
+      const page = Number(url.searchParams.get('page'))
+      const pageSize = Number(url.searchParams.get('page_size'))
+      return Promise.resolve(
+        jsonResponse({
+          items: store.slice((page - 1) * pageSize, page * pageSize),
+          page,
+          page_size: pageSize,
+          total_items: store.length,
+          total_pages: Math.ceil(store.length / pageSize),
+        }),
+      )
+    }
+
+    if (url.pathname.endsWith('/detection/upload') && method === 'POST') {
+      uploads += 1
+      const created = batchItem({
+        batch_id: `00000000-0000-4000-8000-${String(uploads).padStart(12, '0')}`,
+        filename: sentFile(init).name,
+        total_records: 3,
+        created_at: new Date(Date.UTC(2026, 9, 3, 9, uploads)).toISOString(),
+      })
+      store.unshift(created)
+      return Promise.resolve(jsonResponse(created, 201))
+    }
+
+    return Promise.resolve(jsonResponse({ error: 'not_found', message: 'Not found.' }, 404))
+  })
+
+  return { store, fetchMock }
+}
+
+/** `count` batches, newest first: batch-<count> down to batch-1, one minute apart. */
+export function manyBatches(count: number): DetectionBatch[] {
+  return Array.from({ length: count }, (_, i) => {
+    const n = count - i
+    return batchItem({
+      batch_id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+      filename: `batch-${n}.csv`,
+      created_at: new Date(Date.UTC(2026, 9, 3, 8, n)).toISOString(),
+    })
+  })
 }

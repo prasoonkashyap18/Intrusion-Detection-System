@@ -117,7 +117,20 @@ CsvUpload (component) → useCsvUpload (hook) → uploadDetectionCsv (service) �
 - **Client checks** (fast feedback only, never security): `.csv` extension, non-empty, at most 50 MB (`MAX_UPLOAD_BYTES`, mirroring the backend default). The backend validates everything again.
 - **Progress:** `fetch` cannot report upload progress, so the UI shows a truthful indeterminate "Uploading…" — never a percentage. The buttons are disabled and the hook ignores repeat submissions while a request is in flight.
 - **Result:** on success, the batch ID, filename, record count and `pending` status exactly as the backend returned them. On failure, the backend's own user-facing message (via `ApiError.detail`) or a plain-language fallback; **Retry** is offered only when resending could help (network errors, timeouts, 5xx), not for a file the server rejected.
-- **Batches panel:** `useRegisteredBatches` keeps the batches created in this session, so a new batch appears immediately without a reload. There is no list endpoint yet, so **batches from earlier sessions are stored in the database but not shown**, and the panel says so.
+- **After an upload,** the batch list re-fetches page 1 from the backend, so the list never has a second, competing source of truth.
+
+## Detection Batches
+
+The **Detection batches** panel shows batches persisted in SQLite via `GET /api/v1/detection/batches`, so a browser refresh or restart never loses them.
+
+```
+DetectionBatchesPanel → useDetectionBatches (hook) → getDetectionBatches (service) → request() → FastAPI → SQLite
+```
+
+- **Rows:** filename (truncated, full name in a tooltip), status in words (`Pending · registered, waiting for processing` — pending never reads as "analyzing"), record / processed / failed counts, a local-time stamp (`03 Oct 2026, 02:45 PM`, in a semantic `<time>` with the exact UTC instant as its tooltip), and the batch ID.
+- **States:** loading, list, empty (the backend answered: zero batches), error (the backend answered with a failure), and offline (it could not be reached) are distinct, using the shared state components.
+- **Refresh:** a manual button (no polling). The existing list stays visible while it runs, the button is disabled to prevent duplicate requests, and a failed refresh keeps the old list with an inline "Could not refresh" notice and Retry.
+- **Pagination:** 10 per page with Previous / Next, shown only when there is more than one page. If the current page disappears (batches removed elsewhere), the hook falls back to the last page.
 
 ## UI State Components
 
@@ -212,7 +225,7 @@ Tokens live in `src/index.css` (`@theme static`). Tailwind's default palette is 
 ## Current Limitations
 
 - Uploaded CSVs are registered but not analyzed. Detection results, analytics and model-performance views do not exist yet; those navigation sections are marked **Planned**.
-- The batches panel only shows batches registered in the current browser session (no list endpoint yet).
+- Batches are listed but not individually viewable (no single-batch endpoint or detail view yet), and the list does not poll — use Refresh.
 - Upload progress is indeterminate, because `fetch` offers no upload progress events.
 - Telemetry and pipeline panels are structural placeholders — they show no data because no analysis has run.
 - The 3D view renders preview geometry only; real hosts, flows, severity tints and entity details arrive with the detection API. A data-table alternative to the visualization should accompany real data for accessibility.

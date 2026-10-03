@@ -2,7 +2,7 @@ import { Activity, Gauge, ShieldAlert, Siren } from 'lucide-react'
 import { TopologyViewport } from '../../components/topology/TopologyViewport'
 import { StatusDot } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
-import { useRegisteredBatches } from '../../hooks/useRegisteredBatches'
+import { useDetectionBatches } from '../../hooks/useDetectionBatches'
 import { formatCount } from '../../utils/format'
 import { DetectionBatchesPanel } from './DetectionBatchesPanel'
 import { DetectionPipelinePanel } from './DetectionPipelinePanel'
@@ -25,8 +25,8 @@ const TELEMETRY_METRICS: TelemetryMetric[] = [
 ]
 
 export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
-  const { batches, add } = useRegisteredBatches()
-  const registeredRecords = batches.reduce((total, batch) => total + batch.total_records, 0)
+  const batches = useDetectionBatches()
+  const totalBatches = batches.data?.total_items ?? null
 
   return (
     <div className="mx-auto w-full max-w-[1480px] px-5 pt-10 pb-20 md:px-8 lg:px-12 lg:pt-14">
@@ -44,17 +44,19 @@ export function CommandCenterPage({ apiHealth }: { apiHealth: ApiHealth }) {
         </p>
         <p className="mt-6 flex items-start gap-2.5 text-sm text-graphite-500">
           <StatusDot tone="ice" className="mt-1.5" />
-          {batches.length === 0
-            ? 'No network-flow data has been ingested yet. Panels show structural placeholders until real detection results exist.'
-            : `${formatCount(batches.length)} ${batches.length === 1 ? 'batch' : 'batches'} registered this session (${formatCount(registeredRecords)} records). The traffic has not been analyzed yet — detection results will appear once processing exists.`}
+          {totalBatches === null
+            ? 'Panels show structural placeholders until real detection results exist.'
+            : totalBatches === 0
+              ? 'No network-flow data has been ingested yet. Panels show structural placeholders until real detection results exist.'
+              : `${formatCount(totalBatches)} ${totalBatches === 1 ? 'batch' : 'batches'} registered. The traffic has not been analyzed yet — detection results will appear once processing exists.`}
         </p>
       </header>
 
       <TopologyViewport className="mt-10 lg:mt-12" />
 
       <div className="mt-14 grid grid-cols-1 gap-5 lg:mt-16 xl:grid-cols-12">
-        <UploadPanel onUploaded={add} className="xl:col-span-5" />
-        <DetectionBatchesPanel apiHealth={apiHealth} batches={batches} className="xl:col-span-7" />
+        <UploadPanel onUploaded={batches.reloadFirstPage} className="xl:col-span-5" />
+        <DetectionBatchesPanel batches={batches} apiHealth={apiHealth} className="xl:col-span-7" />
       </div>
 
       <section aria-labelledby="telemetry-heading" className="mt-14 lg:mt-16">

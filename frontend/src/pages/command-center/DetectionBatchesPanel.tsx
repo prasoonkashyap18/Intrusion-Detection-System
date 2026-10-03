@@ -1,21 +1,42 @@
-import { Inbox } from 'lucide-react'
-import { EmptyState, LoadingState, OfflineState } from '../../components/states'
+import { ChevronLeft, ChevronRight, Inbox, RefreshCw } from 'lucide-react'
+import { EmptyState, ErrorState, LoadingState, OfflineState } from '../../components/states'
+import { Button } from '../../components/ui/Button'
 import { Panel } from '../../components/ui/Panel'
 import { SectionHeading } from '../../components/ui/SectionHeading'
-import { StatusDot } from '../../components/ui/StatusDot'
+import { StatusDot, type StatusTone } from '../../components/ui/StatusDot'
 import type { ApiHealth } from '../../hooks/useApiHealth'
-import type { UploadBatchResponse } from '../../types/detection'
+import type { DetectionBatches } from '../../hooks/useDetectionBatches'
+import type { DetectionBatch } from '../../types/detection'
+import type { ProcessingStatus } from '../../types/security'
 import { cn } from '../../utils/cn'
-import { formatCount, formatUtcDateTime } from '../../utils/format'
+import { formatCount, formatLocalDateTime, formatUtcDateTime } from '../../utils/format'
 
 interface DetectionBatchesPanelProps {
+  batches: DetectionBatches
+  /** Re-checks backend health alongside a reload when the API was unreachable. */
   apiHealth: ApiHealth
-  /** Batches registered in this browser session. There is no list endpoint yet. */
-  batches: UploadBatchResponse[]
   className?: string
 }
 
-export function DetectionBatchesPanel({ apiHealth, batches, className }: DetectionBatchesPanelProps) {
+interface StatusPresentation {
+  label: string
+  /** What the status means, in words, so it never depends on colour. */
+  meaning: string
+  tone: StatusTone
+}
+
+// Connection-style tones only: batch status is not a security severity.
+const STATUS_PRESENTATION: Record<ProcessingStatus, StatusPresentation> = {
+  pending: { label: 'Pending', meaning: 'registered, waiting for processing', tone: 'ice' },
+  processing: { label: 'Processing', meaning: 'being processed', tone: 'accent' },
+  completed: { label: 'Completed', meaning: 'processing finished', tone: 'accent' },
+  failed: { label: 'Failed', meaning: 'processing failed', tone: 'muted' },
+}
+
+export function DetectionBatchesPanel({ batches, apiHealth, className }: DetectionBatchesPanelProps) {
+  const { data, isLoading, refresh } = batches
+  const isRefreshing = isLoading && data !== null
+
   return (
     <Panel
       interaction="spotlight"
@@ -25,63 +46,150 @@ export function DetectionBatchesPanel({ apiHealth, batches, className }: Detecti
       <SectionHeading
         id="detection-batches-heading"
         title="Detection batches"
-        description="Batches registered in this browser session. Stored batch history is not available yet."
+        description="Registered batches, newest first, loaded from the database."
+        action={
+          <Button onClick={refresh} disabled={isLoading}>
+            <RefreshCw className={cn('size-3.5', isLoading && 'animate-spin')} aria-hidden="true" />
+            Refresh
+          </Button>
+        }
       />
-      {batches.length > 0 ? <BatchList batches={batches} /> : <EmptyBatches apiHealth={apiHealth} />}
+      <p aria-live="polite" className="sr-only">
+        {isRefreshing ? 'Refreshing batches' : ''}
+      </p>
+      <BatchesContent batches={batches} apiHealth={apiHealth} />
     </Panel>
   )
 }
 
-function BatchList({ batches }: { batches: UploadBatchResponse[] }) {
+function BatchesContent({ batches, apiHealth }: { batches: DetectionBatches; apiHealth: ApiHealth }) {
+  const { data, failure, isLoading, refresh } = batches
+
+  if (!data) {
+    if (failure?.unreachable) {
+      return (
+        <OfflineState
+          description="Detection batches cannot be loaded while the API is unreachable. Check that the FastAPI service is running, then try again."
+          isRetrying={isLoading}
+          onRetry={() => {
+            apiHealth.recheck()
+            refresh()
+          }}
+          className="flex-1"
+        />
+      )
+    }
+    if (failure) {
+      return (
+        <ErrorState
+          title="Unable to load detection batches"
+          message={failure.message}
+          onRetry={isLoading ? undefined : refresh}
+          className="flex-1"
+        />
+      )
+    }
+    return <LoadingState title="Loading detection batches" description="Contacting the AI-IDS API." className="flex-1" />
+  }
+
   return (
-    <ul className="mt-6 divide-y divide-graphite-900/6">
-      {batches.map((batch) => (
-        <li key={batch.batch_id} className="flex flex-col gap-1.5 py-3.5 first:pt-0 last:pb-0">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <p className="min-w-0 break-all text-sm font-medium text-graphite-900">{batch.filename}</p>
-            <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-graphite-700">
-              <StatusDot tone="ice" />
-              <span className="capitalize">{batch.status}</span>
-              <span className="text-graphite-500">· not analyzed</span>
-            </span>
-          </div>
-          <p className="text-[13px] text-graphite-500">
-            <span className="tabular-nums">{formatCount(batch.total_records)}</span> records ·{' '}
-            <span className="font-mono text-xs tabular-nums">{formatUtcDateTime(batch.created_at)}</span>
-          </p>
-          <p className="font-mono text-xs break-all text-graphite-500">{batch.batch_id}</p>
-        </li>
-      ))}
-    </ul>
+    <>
+      {failure && (
+        <div className="mt-5 rounded-xl border border-graphite-900/8 bg-graphite-50/60 p-4">
+          <ErrorState
+            compact
+            title="Could not refresh"
+            message={`${failure.message} The list below may be out of date.`}
+            onRetry={isLoading ? undefined : refresh}
+          />
+        </div>
+      )}
+      {data.total_items === 0 ? (
+        <EmptyState
+          icon={Inbox}
+          title="No batches registered yet"
+          description="Upload a network-flow CSV and its batch will appear here, pending analysis."
+          className="flex-1"
+        />
+      ) : (
+        <>
+          <ul aria-busy={isLoading} className={cn('mt-6 divide-y divide-graphite-900/6 transition-opacity', isLoading && 'opacity-60')}>
+            {data.items.map((batch) => (
+              <BatchRow key={batch.batch_id} batch={batch} />
+            ))}
+          </ul>
+          <BatchPager batches={batches} />
+        </>
+      )}
+    </>
   )
 }
 
-/**
- * "Nothing to show" is only honest once the backend has answered. While the
- * health check is in flight, or when it cannot be reached, this says so
- * instead of claiming there are no batches.
- */
-function EmptyBatches({ apiHealth }: { apiHealth: ApiHealth }) {
-  if (apiHealth.status === 'connecting') {
-    return <LoadingState title="Checking for batches" description="Contacting the AI-IDS API." className="flex-1" />
-  }
+function BatchRow({ batch }: { batch: DetectionBatch }) {
+  const status = STATUS_PRESENTATION[batch.status]
 
-  if (apiHealth.status === 'offline') {
-    return (
-      <OfflineState
-        description="Detection batches cannot be loaded while the API is unreachable. Check that the FastAPI service is running, then try again."
-        onRetry={apiHealth.recheck}
-        className="flex-1"
-      />
-    )
+  return (
+    <li className="flex flex-col gap-1.5 py-4 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="min-w-0 flex-1 truncate text-sm font-medium text-graphite-900" title={batch.filename}>
+          {batch.filename}
+        </p>
+        <span className="inline-flex shrink-0 items-center gap-2 text-[13px] text-graphite-700">
+          <StatusDot tone={status.tone} />
+          <span className="font-medium">{status.label}</span>
+          <span className="text-graphite-500">· {status.meaning}</span>
+        </span>
+      </div>
+      <p className="flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-graphite-500">
+        <span>
+          <span className="tabular-nums text-graphite-700">{formatCount(batch.total_records)}</span>{' '}
+          {batch.total_records === 1 ? 'record' : 'records'}
+        </span>
+        <span>
+          <span className="tabular-nums text-graphite-700">{formatCount(batch.processed_records)}</span> processed
+        </span>
+        <span>
+          <span className="tabular-nums text-graphite-700">{formatCount(batch.failed_records)}</span> failed
+        </span>
+        <time dateTime={batch.created_at} title={formatUtcDateTime(batch.created_at)} className="tabular-nums">
+          {formatLocalDateTime(batch.created_at)}
+        </time>
+      </p>
+      <p className="truncate font-mono text-xs text-graphite-500" title={batch.batch_id}>
+        {batch.batch_id}
+      </p>
+    </li>
+  )
+}
+
+function BatchPager({ batches }: { batches: DetectionBatches }) {
+  const { data, isLoading, page, nextPage, previousPage } = batches
+  if (!data) return null
+
+  const summary = `${formatCount(data.total_items)} ${data.total_items === 1 ? 'batch' : 'batches'}`
+  if (data.total_pages <= 1) {
+    return <p className="mt-5 border-t border-graphite-900/6 pt-4 text-[13px] text-graphite-500">{summary}</p>
   }
 
   return (
-    <EmptyState
-      icon={Inbox}
-      title="No batches registered yet"
-      description="Upload a network-flow CSV and its batch will appear here, pending analysis."
-      className="flex-1"
-    />
+    <nav
+      aria-label="Batch pagination"
+      className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-graphite-900/6 pt-4"
+    >
+      <p className="text-[13px] text-graphite-500">
+        Page <span className="tabular-nums text-graphite-700">{data.page}</span> of{' '}
+        <span className="tabular-nums text-graphite-700">{data.total_pages}</span> · {summary}
+      </p>
+      <div className="flex gap-2">
+        <Button aria-label="Previous page" onClick={previousPage} disabled={isLoading || page <= 1}>
+          <ChevronLeft className="size-3.5" aria-hidden="true" />
+          Previous
+        </Button>
+        <Button aria-label="Next page" onClick={nextPage} disabled={isLoading || page >= data.total_pages}>
+          Next
+          <ChevronRight className="size-3.5" aria-hidden="true" />
+        </Button>
+      </div>
+    </nav>
   )
 }

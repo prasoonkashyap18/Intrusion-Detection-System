@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from '@/services'
 import { validateCsvFile } from '@/utils/csvFile'
-import { formatBytes, formatCount, formatUtcDateTime } from '@/utils/format'
+import { formatBytes, formatCount, formatLocalDateTime, formatUtcDateTime } from '@/utils/format'
 import { describeUploadFailure } from '@/utils/uploadFailure'
 import { csvFile } from './helpers'
 
@@ -80,5 +80,16 @@ describe('describeUploadFailure', () => {
   it('handles a non-ApiError defensively', () => {
     expect(describeUploadFailure(new Error('boom'))).toMatchObject({ retryable: true })
     expect(describeUploadFailure('boom').message).not.toContain('boom')
+  })
+})
+
+describe('formatLocalDateTime', () => {
+  it('uses a readable day, month, year and 12-hour time (timezone pinned to UTC in tests)', () => {
+    expect(formatLocalDateTime('2026-10-03T14:45:00Z')).toBe('03 Oct 2026, 02:45 PM')
+    expect(formatLocalDateTime('2026-09-01T00:05:00Z')).toBe('01 Sep 2026, 12:05 AM')
+  })
+
+  it('returns an unparseable value unchanged', () => {
+    expect(formatLocalDateTime('nope')).toBe('nope')
   })
 })
