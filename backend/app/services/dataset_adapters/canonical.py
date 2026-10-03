@@ -68,3 +68,15 @@ class CanonicalDatasetRecord:
     provides one distinct from its label column (e.g. UNSW-NB15's
     `attack_cat`). `None` when no such column exists — never derived from
     `label` or any other field."""
+
+    label_column: str | None = None
+    """The original source column name `label` was read from, when a label
+    column was recognized — `None` when no label column exists. Companion
+    to `column_mapping` for the same traceability reason, for the one
+    field `column_mapping` cannot cover (a label column is handled before
+    the canonical-field mapping, so it never appears in `column_mapping`
+    itself)."""
+
+    attack_category_column: str | None = None
+    """The original source column name `attack_category` was read from,
+    when an attack-category column was recognized — `None` otherwise."""

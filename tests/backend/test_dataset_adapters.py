@@ -463,6 +463,27 @@ class TestOriginalValuePreservation:
         assert result.column_mapping["source_ip"] == "srcip"
         assert result.column_mapping["protocol"] == "proto"
 
+    def test_label_column_traces_the_label_back_to_its_source_column(self):
+        record = make_record({"srcip": "1.1.1.1", "label": "1"})
+
+        result = UnswNb15StyleAdapter().adapt(record)
+
+        assert result.label_column == "label"
+
+    def test_attack_category_column_traces_it_back_to_its_source_column(self):
+        record = make_record({"srcip": "1.1.1.1", "attack_cat": "Exploits"})
+
+        result = UnswNb15StyleAdapter().adapt(record)
+
+        assert result.attack_category_column == "attack_cat"
+
+    def test_label_column_is_none_when_no_label_column_exists(self):
+        record = make_record({"protocol_type": "tcp", "service": "http"})
+
+        result = NslKddStyleAdapter().adapt(record)
+
+        assert result.label_column is None
+
     def test_the_full_original_record_remains_reachable(self):
         record = make_record({"srcip": "10.0.0.1", "extra": "value"})
 

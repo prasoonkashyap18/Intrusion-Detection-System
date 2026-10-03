@@ -210,28 +210,61 @@ def _detect_encoding(csv_path: Path) -> str:
     raise ApiException(400, "ingestion_invalid_csv", "The file could not be read as text.")  # pragma: no cover - latin-1 never fails
 
 
+def read_header(csv_path: Path) -> list[str]:
+    """Reads just a stored batch CSV's header row, applying the same
+    structural rules `ingest_batch` applies (blank lines skipped, at least
+    `MIN_COLUMNS` columns required) but stopping as soon as the header is
+    found rather than continuing into the data rows.
+
+    For callers that only need column names — `app.services.
+    dataset_profiling` and `app.services.dataset_adapters.select_adapter`
+    — so identifying a dataset's schema never requires streaming the whole
+    file. Raises the same `ApiException` codes as `ingest_batch`, for the
+    same reasons: a missing/unreadable file, a file that cannot be decoded
+    as text, or no usable header row.
+    """
+    if not csv_path.is_file():
+        logger.error("Header requested for a missing file: %s", csv_path.name)
+        raise ApiException(404, "ingestion_file_missing", "The uploaded file for this batch could not be found.")
+
+    encoding = _detect_encoding(csv_path)
+    with csv_path.open("r", encoding=encoding, newline="") as handle:
+        reader = csv.reader(lines_without_nul(handle), strict=True)
+        return _read_header_row(reader, csv_path)
+
+
+def _read_header_row(reader: Iterator[list[str]], csv_path: Path) -> list[str]:
+    """Shared by `ingest_batch` and `read_header`: finds the first
+    non-blank row of an open CSV reader and validates it has enough
+    columns to be a usable header."""
+    try:
+        for row in reader:
+            if not any(cell.strip() for cell in row):
+                continue  # blank line, consistent with upload validation
+            if len(row) < MIN_COLUMNS:
+                raise ApiException(
+                    400,
+                    "ingestion_invalid_csv",
+                    f"CSV must have at least {MIN_COLUMNS} comma-separated columns.",
+                )
+            return row
+    except csv.Error:
+        logger.exception("Malformed CSV in %s near line %d", csv_path.name, reader.line_num)
+        raise ApiException(400, "ingestion_invalid_csv", f"CSV is malformed near line {reader.line_num}.") from None
+    raise ApiException(400, "ingestion_invalid_csv", "CSV has no header row.")
+
+
 def _read_records(csv_path: Path, encoding: str) -> Iterator[NetworkFlowRecord]:
     with csv_path.open("r", encoding=encoding, newline="") as handle:
         reader = csv.reader(lines_without_nul(handle), strict=True)
-        header: list[str] | None = None
-        header_map: dict[int, str] = {}
+        header = _read_header_row(reader, csv_path)
+        header_map = _build_header_map(header)
         row_number = 0
 
         try:
             for row in reader:
                 if not any(cell.strip() for cell in row):
                     continue  # blank line, consistent with upload validation
-
-                if header is None:
-                    header = row
-                    if len(header) < MIN_COLUMNS:
-                        raise ApiException(
-                            400,
-                            "ingestion_invalid_csv",
-                            f"CSV must have at least {MIN_COLUMNS} comma-separated columns.",
-                        )
-                    header_map = _build_header_map(header)
-                    continue
 
                 if len(row) != len(header):
                     logger.error(
@@ -252,9 +285,6 @@ def _read_records(csv_path: Path, encoding: str) -> Iterator[NetworkFlowRecord]:
         except csv.Error:
             logger.exception("Malformed CSV in %s near line %d", csv_path.name, reader.line_num)
             raise ApiException(400, "ingestion_invalid_csv", f"CSV is malformed near line {reader.line_num}.") from None
-
-    if header is None:
-        raise ApiException(400, "ingestion_invalid_csv", "CSV has no header row.")
 
 
 def _build_record(row_number: int, header: list[str], header_map: dict[int, str], row: list[str]) -> NetworkFlowRecord:

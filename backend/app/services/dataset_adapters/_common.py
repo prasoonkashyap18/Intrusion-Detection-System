@@ -51,15 +51,19 @@ def adapt_with_column_map(
     unknown_fields: dict[str, str] = {}
     label: str | None = None
     attack_category: str | None = None
+    label_column: str | None = None
+    attack_category_column: str | None = None
 
     for column, value in record.raw_features.items():
         normalized = normalize_column_name(column)
 
         if normalized in label_columns:
             label = value.strip() or None
+            label_column = column
             continue
         if normalized in attack_category_columns:
             attack_category = value.strip() or None
+            attack_category_column = column
             continue
 
         canonical_name = column_map.get(normalized)
@@ -78,4 +82,6 @@ def adapt_with_column_map(
         unknown_fields=unknown_fields,
         label=label,
         attack_category=attack_category,
+        label_column=label_column,
+        attack_category_column=attack_category_column,
     )
