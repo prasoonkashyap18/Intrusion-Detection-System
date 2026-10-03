@@ -224,7 +224,7 @@ A batch reaches `failed` here if its upload file is missing from disk, its CSV f
 
 **Concurrency.** The `pending -> processing` transition is one atomic `UPDATE detection_batches SET status = 'processing' WHERE id = :id AND status = 'pending'` (`claim_for_processing`), committed immediately, with the result read from `rowcount` rather than a separate SELECT beforehand. Two requests that both observe `pending` cannot both win: only one UPDATE's `WHERE` clause can still match once the other has committed, so the loser's statement affects zero rows and the service raises `409` instead of double-claiming the batch.
 
-**Where Step 16 plugs in:** `_ingest_batch_csv()` in `batch_processor.py` currently does nothing with the `NetworkFlowRecord`s it reads beyond proving they all parse. A later step replaces that body to map each record's fields (generic and `raw_features`) into ML-ready features and run model inference, writing `DetectionResult` rows and updating `processed_records`/`failed_records` as real rows are analyzed, and is responsible for the `processing -> completed` transition this step intentionally does not make.
+**Where a later step plugs in:** `_ingest_batch_csv()` in `batch_processor.py` currently does nothing with the `NetworkFlowRecord`s it reads beyond proving they all parse. `app/services/feature_extraction.py` (see [Feature Extraction and Normalization](#feature-extraction-and-normalization) below) already exists to turn each record into model-ready features, but is not yet wired into this boundary — a later step replaces this body to call it, run model inference, write `DetectionResult` rows and update `processed_records`/`failed_records` as real rows are analyzed, and is responsible for the `processing -> completed` transition this step intentionally does not make.
 
 ## CSV Ingestion
 
@@ -247,11 +247,45 @@ class NetworkFlowRecord:
     raw_features: dict[str, str]
 ```
 
-- **Dataset-independent.** Only a small, generic set of networking column names is recognized (`source_ip`/`src_ip`, `destination_ip`/`dst_ip`/`dest_ip`, `source_port`/`src_port`, `destination_port`/`dst_port`/`dest_port`, `protocol`/`proto`, `timestamp`/`flow_timestamp`; matched case- and whitespace-insensitively). There is no `if dataset == "NSL-KDD"` branch and no hardcoded column list for any specific public IDS dataset. Every other column — `duration`, `service`, `flag`, `label`, or anything else a dataset uses — survives ingestion untouched in `raw_features`, keyed by its original header text. Expanding this mapping for specific datasets is Step 16's job; this step only provides the header-to-field mechanism for it to build on.
+- **Dataset-independent.** Only a small, generic set of networking column names is recognized (`source_ip`/`src_ip`, `destination_ip`/`dst_ip`/`dest_ip`, `source_port`/`src_port`, `destination_port`/`dst_port`/`dest_port`, `protocol`/`proto`, `timestamp`/`flow_timestamp`; matched case- and whitespace-insensitively). There is no `if dataset == "NSL-KDD"` branch and no hardcoded column list for any specific public IDS dataset. Every other column — `duration`, `service`, `flag`, `label`, or anything else a dataset uses — survives ingestion untouched in `raw_features`, keyed by its original header text. Expanding this mapping for a specific dataset is left to a future dataset-adapter mechanism; this layer only provides the header-to-field mechanism for one to build on. The feature-extraction layer below recognizes a separate, larger set of generic aliases of its own, read directly from `raw_features` — see [Feature Extraction and Normalization](#feature-extraction-and-normalization).
 - **Never fabricates a value.** A recognized column whose text cannot be safely interpreted (a non-numeric port, an invalid IP) leaves that field `None` rather than guessing or defaulting to `0`/`""`/`false` — the original text is still available in `raw_features`, so nothing is lost. Timestamp parsing is conservative: only an unambiguous ISO 8601 string is accepted.
 - **Structural errors fail the whole operation, not just one row.** A header with too few columns, no header at all, or a data row whose width does not match the header raises `ApiException` (`ingestion_invalid_csv`) rather than silently skipping the bad row — the same standard `upload_service.py`'s own validation already applies at upload time, so a file that reaches ingestion is expected to already satisfy it; this is defense in depth for whenever ingestion runs independently of that path. A missing or unreadable file raises `ingestion_file_missing` / `ingestion_unreadable`. Every error follows the project's existing `ApiException` pattern; messages are user-safe, and filesystem paths and stack traces are logged server-side only, never returned.
 - **Streaming.** `ingest_batch()` is a generator: it yields one `NetworkFlowRecord` per data row as the caller consumes it, so a large CSV's rows are never collected into a list in this module. Confirming the file's text encoding (reusing the same `utf-8-sig` → `latin-1` fallback as `csv_validation.py`) does read the file's bytes once upfront — encoding can only be confirmed by seeing the whole file decode, and deciding that mid-stream would mean silently re-yielding earlier rows a second time after restarting with a different encoding. That one bounded read (bounded by the same upload size limit already enforced at upload time) is what buys that correctness; the per-row parse after it is what stays lazy.
-- **No ML inference.** This module does not predict, classify, score, or create `DetectionResult` rows. `batch_processor.py`'s `_ingest_batch_csv()` currently exhausts the iterator and discards every record, which exists only to prove every row reads and validates — see "Where Step 16 plugs in" above for what replaces that body.
+- **No ML inference.** This module does not predict, classify, score, or create `DetectionResult` rows. `batch_processor.py`'s `_ingest_batch_csv()` currently exhausts the iterator and discards every record, which exists only to prove every row reads and validates — see "Where a later step plugs in" above for what replaces that body.
+
+## Feature Extraction and Normalization
+
+```
+NetworkFlowRecord -> extract_raw_features() -> RawFeatureSet -> normalize_features() -> NormalizedFlowFeatures
+```
+
+`app/services/feature_extraction.py` turns a `NetworkFlowRecord` into `NormalizedFlowFeatures`: the input contract a future ML model step will consume. **It is not wired into the processing lifecycle yet** — nothing currently calls it from `batch_processor.py`; it exists as a standalone, independently-tested layer for that later step to call. It performs no machine learning: no prediction, classification, scoring, risk assessment, or `DetectionResult` row is produced here, and it has no knowledge of any particular ML algorithm.
+
+```python
+FEATURE_SCHEMA: tuple[str, ...] = (
+    "source_port", "destination_port", "source_ip_numeric", "destination_ip_numeric",
+    "protocol_number", "flow_duration", "packet_count", "byte_count", "packet_rate",
+    "byte_rate", "forward_packet_count", "forward_byte_count", "backward_packet_count",
+    "backward_byte_count", "tcp_flags",
+)
+
+@dataclass(frozen=True)
+class NormalizedFlowFeatures:
+    row_number: int
+    source_ip: str | None
+    destination_ip: str | None
+    protocol_name: str | None
+    features: dict[str, float | int | None]   # exactly FEATURE_SCHEMA's keys
+    feature_status: dict[str, FeatureStatus]   # why each feature does/doesn't have a value
+    unknown_features: dict[str, str]           # every unrecognized raw_features column, verbatim
+```
+
+- **Why it reads `raw_features`, not `NetworkFlowRecord`'s typed fields.** Ingestion already types 6 fields (`source_ip`, `source_port`, ...), but folds "column missing" and "column present but unparseable" into the same `None` — a deliberate ingestion-layer simplification (see its own docstring). This layer needs that distinction, so it re-parses directly from `raw_features`, which keeps every column's original text regardless of whether ingestion recognized it. This also means adding a new generic feature here never requires changing `ingestion.py`.
+- **Four explicit outcomes per feature** (`FeatureStatus`): `PRESENT` (parsed successfully), `MISSING` (no matching column, or an empty value — most datasets don't provide every concept), `MALFORMED` (a value was present but did not parse as the expected type, or violated an inherent constraint like a negative byte count or an out-of-range port — **never** silently turned into `0`/`""`/a guess), and `UNSUPPORTED` (syntactically valid data this module has no deterministic encoding for yet, e.g. a protocol name outside its small known table, or textual TCP flags like `"SF"` instead of a numeric bitmask — the original text is not discarded, it stays reachable on the source `NetworkFlowRecord`).
+- **Deterministic feature ordering.** `FEATURE_SCHEMA` is a fixed tuple, not a dict's iteration order. `NormalizedFlowFeatures.feature_vector()` builds the model input list from that tuple explicitly; extracting the same record twice always yields identical output (covered by a repeated-extraction test).
+- **IP and protocol representation.** A syntactically valid IPv4/IPv6 address is encoded as its standard integer form (`int(ipaddress.ip_address(...))`) — a deterministic, reversible encoding, not a threat or reputation judgment; this module makes no external network calls and assigns no risk to any address. A protocol is recognized by name or IANA number for a small set of common protocols (`icmp`/`tcp`/`udp`/`icmpv6`) via a fixed, never-invented lookup table; anything else is `UNSUPPORTED`, with its original text preserved as `protocol_name`.
+- **Dataset-independent.** No `if dataset == "..."` branch exists anywhere in this module. `_COLUMN_ALIASES` is a small, explicitly generic seed (duration, packet/byte counts, forward/backward stats, TCP flags, ...), matched case- and whitespace-insensitively; every unrecognized column survives, untouched, in `unknown_features`. A specific public dataset's own column names are left to a future dataset-adapter mechanism, not implemented here.
+- **Normalization is separated from extraction on purpose, and does nothing by default.** `extract_raw_features()` only type-parses; `normalize_features()` is the hook a future *fitted* scaler plugs into via the `FeatureScaler` protocol (`(feature_name, value) -> value`). This module does not compute or store any mean/std/min/max itself — doing so would require a representative dataset this layer does not have access to, and scaling parameters are a model-training concern, not a request-time one. Called with no scaler (today's only caller), `normalize_features()` is the identity transform. A scaler is applied only to `PRESENT` features; `MISSING`/`MALFORMED`/`UNSUPPORTED` features stay `None` regardless of any scaler, so normalization can never turn "we don't have this value" into a number.
 
 ## API Schemas
 
@@ -275,7 +309,7 @@ Database, upload and batch-listing tests use an isolated in-memory SQLite databa
 
 ## Current Limitations
 
-- No ML training/inference, feature extraction, detection results, or dashboard logic exists yet. A batch's CSV is now read and structurally validated during processing, but no row is interpreted as a feature vector and no model runs, so nothing is actually analyzed and no batch reaches `completed` yet.
+- No ML training/inference, detection results, or dashboard logic exists yet. A batch's CSV is read and structurally validated during processing, and a standalone feature-extraction layer (`app/services/feature_extraction.py`) can turn a `NetworkFlowRecord` into model-ready features, but that layer is not yet called during processing and no model runs — nothing is actually analyzed and no batch reaches `completed` yet.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
