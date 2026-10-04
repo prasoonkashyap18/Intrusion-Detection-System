@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.errors import ApiException
 from app.db.database import get_db
 from app.models.detection_batch import DetectionBatch
+from app.models.detection_result import DetectionResult
 from app.models.enums import ProcessingStatus
 from app.schemas.batch import (
     BatchProcessingResponse,
@@ -20,8 +21,10 @@ from app.schemas.batch import (
     UploadBatchResponse,
 )
 from app.schemas.common import ErrorResponse
+from app.schemas.detection import DetectionResultListResponse, DetectionResultResponse
 from app.services.batch_processor import start_processing
 from app.services.batch_service import get_batch, list_batches
+from app.services.detection_result_service import get_detection_result, list_detection_results_for_batch
 from app.services.upload_service import UploadConfig, register_upload
 
 router = APIRouter(prefix="/detection")
@@ -37,6 +40,21 @@ def _summarize(batch: DetectionBatch) -> DetectionBatchSummary:
         failed_records=batch.failed_records,
         created_at=batch.created_at,
         completed_at=batch.completed_at,
+    )
+
+
+def _to_detection_result_response(result: DetectionResult) -> DetectionResultResponse:
+    return DetectionResultResponse(
+        id=result.id,
+        batch_id=result.batch_id,
+        model_id=result.model_id,
+        model_name=result.model_name,
+        model_version=result.model_version,
+        row_number=result.row_number,
+        predicted_label=result.predicted_label,
+        prediction_name=result.prediction_name,
+        attack_probability=result.attack_probability,
+        created_at=result.created_at,
     )
 
 
@@ -151,10 +169,12 @@ _PROCESSING_MESSAGES = {
     response_model=BatchProcessingResponse,
     summary="Start processing a pending detection batch",
     description=(
-        "Claims a pending batch and transitions it to `processing`, the boundary where a "
-        "future step's CSV parsing, feature extraction and ML inference will run. This "
-        "endpoint performs no analysis itself: no DetectionResult rows are created, and "
-        "processed/failed record counts are left at zero."
+        "Claims a pending batch and transitions it to `processing`: CSV ingestion, feature "
+        "persistence, model inference and DetectionResult persistence all run as part of this "
+        "call for a recognized dataset schema with a compatible trained model (see the "
+        "`GET /batches/{batch_id}/results` endpoint for the resulting predictions). The batch "
+        "never reaches `completed` here, and processed/failed record counts are left at zero — "
+        "those remain detection-outcome counters this pipeline does not populate yet."
     ),
     responses={
         404: {"model": ErrorResponse, "description": "No batch exists with that ID"},
@@ -174,3 +194,57 @@ def start_detection_batch_processing(
         status=batch.status,
         message=_PROCESSING_MESSAGES[batch.status],
     )
+
+
+@router.get(
+    "/batches/{batch_id}/results",
+    response_model=DetectionResultListResponse,
+    summary="List persisted detection results for one batch, ordered by row_number",
+    description=(
+        "Returns one page of this batch's own DetectionResult rows — each a prediction "
+        "already produced by model inference and persisted during processing (see "
+        "`POST /batches/{batch_id}/process`). This endpoint performs no analysis itself: it "
+        "only reads rows that already exist. An empty collection is a normal `200` with "
+        "`items: []` (a batch that has not been processed yet, or whose schema was not "
+        "recognized, simply has none)."
+    ),
+    responses={
+        404: {"model": ErrorResponse, "description": "No batch exists with that ID"},
+        422: {"model": ErrorResponse, "description": "Invalid batch_id, page or page_size"},
+        500: {"model": ErrorResponse, "description": "Detection results could not be loaded"},
+    },
+)
+def get_batch_detection_results(
+    batch_id: uuid.UUID,
+    page: int = Query(default=1, ge=1, le=1_000_000, description="1-based page number."),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE, description="Results per page."),
+    db: Session = Depends(get_db),
+) -> DetectionResultListResponse:
+    get_batch(db, batch_id)  # 404 if the batch itself does not exist
+    result = list_detection_results_for_batch(db, batch_id, page=page, page_size=page_size)
+    return DetectionResultListResponse(
+        items=[_to_detection_result_response(row) for row in result.items],
+        batch_id=batch_id,
+        page=page,
+        page_size=page_size,
+        total_items=result.total_items,
+        total_pages=result.total_pages,
+    )
+
+
+@router.get(
+    "/results/{result_id}",
+    response_model=DetectionResultResponse,
+    summary="Retrieve one persisted detection result by id",
+    description="Returns the detection result exactly as stored, including its originating model's identity.",
+    responses={
+        404: {"model": ErrorResponse, "description": "No detection result exists with that ID"},
+        422: {"model": ErrorResponse, "description": "result_id is not a valid UUID"},
+        500: {"model": ErrorResponse, "description": "The detection result could not be loaded"},
+    },
+)
+def get_detection_result_by_id(
+    result_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> DetectionResultResponse:
+    return _to_detection_result_response(get_detection_result(db, result_id))

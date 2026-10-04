@@ -98,3 +98,13 @@ class DetectionResult(Base):
 
     batch: Mapped["DetectionBatch"] = relationship("DetectionBatch", back_populates="results")
     model: Mapped["ModelMetadata"] = relationship("ModelMetadata", back_populates="results")
+
+    @property
+    def model_name(self) -> str:
+        """Read through the existing `model` relationship — Step 28's API
+        reports this without duplicating it as a column here."""
+        return self.model.model_name
+
+    @property
+    def model_version(self) -> str:
+        return self.model.model_version
