@@ -27,6 +27,10 @@ from app.models.enums import ProcessingStatus
 from app.models.mapped_feature_record import MappedFeatureRecord
 from app.services import batch_processor
 from app.services.batch_processor import start_processing
+from app.services.dataset_adapters.label_mapping import BinaryLabel
+from app.services.feature_extraction import FEATURE_SCHEMA, FEATURE_SCHEMA_VERSION
+from app.services.model_training import train_baseline_model
+from app.services.training_data import TrainingDataset
 from app.services.upload_service import UploadConfig
 
 NSL_KDD_CSV = (
@@ -79,8 +83,47 @@ def persisted_rows(db_session, batch_id):
     return db_session.scalars(select(MappedFeatureRecord).where(MappedFeatureRecord.batch_id == batch_id)).all()
 
 
+def register_ready_nsl_kdd_model(db_session, tmp_path: Path):
+    """Registers a real, trained, READY model compatible with the
+    `nsl-kdd-style` dataset schema and the current `FEATURE_SCHEMA_VERSION`
+    — Step 26 wires model inference into processing, so a batch processed
+    through a recognized schema now needs a compatible model to finish
+    processing successfully (see batch_processor's "Inference boundary").
+    Unrelated to the actual NSL_KDD_CSV content above; only the schema
+    identity and feature-schema version need to line up.
+    """
+    n_features = len(FEATURE_SCHEMA)
+    feature_matrix: list[list[float | None]] = []
+    labels: list[BinaryLabel] = []
+    record_ids: list[uuid.UUID] = []
+    batch_ids: list[uuid.UUID] = []
+    training_batch_id = uuid.uuid4()
+    for i in range(20):
+        feature_matrix.append([float(i % 7)] * n_features)
+        labels.append(BinaryLabel.BENIGN)
+        record_ids.append(uuid.uuid4())
+        batch_ids.append(training_batch_id)
+    for i in range(20):
+        feature_matrix.append([float(100 + i % 7)] * n_features)
+        labels.append(BinaryLabel.ATTACK)
+        record_ids.append(uuid.uuid4())
+        batch_ids.append(training_batch_id)
+
+    dataset = TrainingDataset(
+        feature_matrix=feature_matrix,
+        labels=labels,
+        record_ids=record_ids,
+        batch_ids=batch_ids,
+        dataset_schemas=["nsl-kdd-style"] * 40,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        excluded_unmappable_label_count=0,
+    )
+    return train_baseline_model(db_session, dataset, artifact_dir=tmp_path, test_fraction=0.0, group_by_batch=False)
+
+
 class TestRecognizedSchemaPersistence:
-    def test_a_recognized_schema_persists_one_row_per_data_row(self, db_session, upload_dir):
+    def test_a_recognized_schema_persists_one_row_per_data_row(self, db_session, upload_dir, tmp_path):
+        register_ready_nsl_kdd_model(db_session, tmp_path)
         batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
 
         result = start_processing(db_session, batch.id, upload_dir)
@@ -231,7 +274,8 @@ class TestDuplicateReprocessingProtection:
 
 
 class TestNoFalseCompletionRegression:
-    def test_a_batch_with_persisted_features_still_stays_processing_not_completed(self, db_session, upload_dir):
+    def test_a_batch_with_persisted_features_still_stays_processing_not_completed(self, db_session, upload_dir, tmp_path):
+        register_ready_nsl_kdd_model(db_session, tmp_path)
         batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
 
         result = start_processing(db_session, batch.id, upload_dir)
