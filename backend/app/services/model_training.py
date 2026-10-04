@@ -3,13 +3,13 @@ registered classifier.
 
     TrainingDataset (app.services.training_data)
         |
-    deterministic train/validation split (stratified)
+    prepare_training_data() (app.services.dataset_split) -> train/validation/test
         |
-    fit imputer on the TRAIN split only
+    fit imputer on the TRAIN partition only
         |
     train RandomForestClassifier (fixed, documented configuration)
         |
-    evaluate on the VALIDATION split (real predictions only)
+    evaluate on the VALIDATION partition (real predictions only)
         |
     write artifact (joblib) -> register in ModelMetadata (only after the
         artifact write succeeds)
@@ -20,9 +20,20 @@ This module is the training FOUNDATION, not the runtime detection engine:
 it does not expose a prediction API, does not create `DetectionResult`
 rows, and does not compute or display any attack confidence, severity,
 risk, or threat score. `validation_metrics` on the result are real numbers
-computed from this run's own held-out validation split — never a
+computed from this run's own held-out validation partition — never a
 production-performance claim, and never shown anywhere outside this
 internal result object in this step.
+
+Splitting itself is not implemented here — `app.services.dataset_split.
+prepare_training_data` owns that (train/validation/test partitioning,
+stratification, and batch/group isolation), so this module never
+duplicates split logic. By default this module requests `test_fraction=0.0`
+(no held-out test partition) and `group_by_batch=False`, which reproduces
+this module's original train/validation-only behavior exactly; a caller
+may opt into a genuine held-out `test` partition and/or batch-isolated
+splitting via the `test_fraction`/`group_by_batch` keyword arguments.
+Whatever `test` partition is produced is deliberately never read by this
+module — evaluating against it is a later step's job, not this one's.
 
 No dataset-specific logic lives here: label interpretation is
 `app.services.dataset_adapters.label_mapping`'s job, already applied by
@@ -42,12 +53,12 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-from sklearn.model_selection import train_test_split
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.enums import ModelStatus
 from app.models.model_metadata import ModelMetadata
+from app.services.dataset_split import DatasetSplitError, prepare_training_data
 from app.services.feature_extraction import FEATURE_SCHEMA
 from app.services.training_data import ModelTrainingError, TrainingDataset
 
@@ -98,6 +109,11 @@ class TrainingResult:
     dataset_schema: str
     training_sample_count: int
     validation_sample_count: int
+    test_sample_count: int
+    """The size of the held-out test partition `app.services.dataset_split`
+    prepared alongside train/validation — `0` whenever `test_fraction=0.0`
+    (this module's default). Reported for transparency only; this module
+    never reads the test partition's contents or evaluates against it."""
     feature_count: int
     class_distribution: dict[str, int]
     """Benign/attack counts across every row actually used (train + validation
@@ -119,42 +135,50 @@ def train_baseline_model(
     model_name: str = "ai-ids-baseline",
     model_version: str | None = None,
     artifact_dir: Path,
+    test_fraction: float = 0.0,
+    group_by_batch: bool = False,
 ) -> TrainingResult:
     """Trains, evaluates, persists, and registers one baseline model from
     an already-loaded `TrainingDataset` (see `app.services.training_data.
     load_training_data`).
 
+    Splitting is delegated to `app.services.dataset_split.
+    prepare_training_data` (see that module for the full split strategy).
+    `test_fraction=0.0` and `group_by_batch=False` are this function's
+    defaults, reproducing its original train/validation-only behavior; the
+    prepared `test` partition (when `test_fraction > 0`) is never read by
+    this function — it is reserved for a later evaluation step.
+
     Raises `ModelTrainingError` for any precondition this function cannot
-    safely proceed past: too few samples, too few samples in one class to
-    stratify, or training rows spanning more than one dataset schema (a
-    modeling decision outside this step's scope — train one model per
-    dataset family). Raises `ModelTrainingError` (wrapping the original
-    cause only in the server log, never in the message) if the artifact
-    cannot be written, or if registering the trained model in the database
-    fails — in the latter case, the orphaned artifact file is removed so a
-    database failure never leaves an unregistered, undiscoverable model
-    file masquerading as evidence of a successful run; see "Transaction
-    safety" in backend/README.md.
+    safely proceed past: too few samples, an unsplittable dataset (wrapped
+    from `DatasetSplitError`), or training rows spanning more than one
+    dataset schema (a modeling decision outside this step's scope — train
+    one model per dataset family). Raises `ModelTrainingError` (wrapping
+    the original cause only in the server log, never in the message) if
+    the artifact cannot be written, or if registering the trained model in
+    the database fails — in the latter case, the orphaned artifact file is
+    removed so a database failure never leaves an unregistered,
+    undiscoverable model file masquerading as evidence of a successful
+    run; see "Transaction safety" in backend/README.md.
     """
     _validate_sample_counts(dataset)
     dataset_schema = _validate_single_dataset_schema(dataset)
 
-    X = np.array(dataset.feature_matrix, dtype=float)
-    y = np.array([int(label) for label in dataset.labels], dtype=int)
-
     try:
-        X_train, X_val, y_train, y_val = train_test_split(
-            X,
-            y,
-            test_size=VALIDATION_FRACTION,
-            random_state=RANDOM_SEED,
-            stratify=y,
+        prepared = prepare_training_data(
+            dataset,
+            test_fraction=test_fraction,
+            validation_fraction=VALIDATION_FRACTION,
+            random_seed=RANDOM_SEED,
+            group_by_batch=group_by_batch,
         )
-    except ValueError:
-        logger.exception("Stratified train/validation split failed for a training run")
-        raise ModelTrainingError(
-            "Unable to create a stratified train/validation split from the available labeled data."
-        ) from None
+    except DatasetSplitError as exc:
+        raise ModelTrainingError(exc.message) from None
+
+    X_train = np.array(prepared.train.feature_matrix, dtype=float)
+    y_train = np.array([int(label) for label in prepared.train.labels], dtype=int)
+    X_val = np.array(prepared.validation.feature_matrix, dtype=float)
+    y_val = np.array([int(label) for label in prepared.validation.labels], dtype=int)
 
     imputer = SimpleImputer(strategy=IMPUTATION_STRATEGY, keep_empty_features=True)
     X_train_imputed = imputer.fit_transform(X_train)  # fitted on TRAIN ONLY
@@ -177,6 +201,8 @@ def train_baseline_model(
 
     training_config = {
         "validation_fraction": VALIDATION_FRACTION,
+        "test_fraction": test_fraction,
+        "group_by_batch": group_by_batch,
         "random_seed": RANDOM_SEED,
         "model_type": MODEL_TYPE,
         "model_params": dict(RANDOM_FOREST_PARAMS),
@@ -202,7 +228,10 @@ def train_baseline_model(
         logger.exception("Failed to write model artifact for model %s", model_id)
         raise ModelTrainingError("Unable to save the trained model artifact.") from None
 
-    class_distribution = {"benign": int(np.sum(y == 0)), "attack": int(np.sum(y == 1))}
+    class_distribution = {
+        "benign": prepared.train.class_distribution["benign"] + prepared.validation.class_distribution["benign"],
+        "attack": prepared.train.class_distribution["attack"] + prepared.validation.class_distribution["attack"],
+    }
 
     try:
         registry_entry = ModelMetadata(
@@ -237,6 +266,7 @@ def train_baseline_model(
         dataset_schema=dataset_schema,
         training_sample_count=len(y_train),
         validation_sample_count=len(y_val),
+        test_sample_count=prepared.test.sample_count,
         feature_count=len(FEATURE_SCHEMA),
         class_distribution=class_distribution,
         excluded_unmappable_label_count=dataset.excluded_unmappable_label_count,

@@ -94,18 +94,19 @@ class TestTrainValidationSplit:
         # Asserting on the trained model's output can't distinguish a
         # stratified split from an unstratified one that happens to land
         # on the same split by chance for a given seed — so this checks
-        # the implementation detail directly: train_test_split must be
-        # called with the labels as `stratify`.
-        import app.services.model_training as model_training_module
+        # the implementation detail directly: app.services.dataset_split
+        # (which train_baseline_model delegates splitting to) must call
+        # train_test_split with the labels as `stratify`.
+        import app.services.dataset_split as dataset_split_module
 
         captured = {}
-        real_split = model_training_module.train_test_split
+        real_split = dataset_split_module.train_test_split
 
         def spy_split(*args, **kwargs):
             captured["stratify"] = kwargs.get("stratify")
             return real_split(*args, **kwargs)
 
-        monkeypatch.setattr(model_training_module, "train_test_split", spy_split)
+        monkeypatch.setattr(dataset_split_module, "train_test_split", spy_split)
         dataset = make_dataset()
 
         train_baseline_model(db_session, dataset, artifact_dir=tmp_path)
