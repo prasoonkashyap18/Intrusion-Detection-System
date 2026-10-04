@@ -31,6 +31,11 @@ class Settings:
     # directory, like DATABASE_URL). Contents never go into SQLite.
     upload_dir: str = os.getenv("UPLOAD_DIR", "./data/uploads")
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "50"))
+    # Trained model artifacts (joblib files), relative to the working
+    # directory like the paths above. Resolves to the repo-root `models/`
+    # directory the project already git-ignores *.joblib under (see
+    # models/README.md) — not a new, separate location.
+    model_artifact_dir: str = os.getenv("MODEL_ARTIFACT_DIR", "../models")
 
 
 settings = Settings()

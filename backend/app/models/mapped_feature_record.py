@@ -90,6 +90,21 @@ class MappedFeatureRecord(Base):
     CSV row: every canonical column's text already lives in `features`,
     via each feature's own `"raw_value"`."""
 
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    """The dataset's own label text, exactly as `CanonicalDatasetRecord.
+    label` reported it (e.g. `"normal"`, `"neptune"`, `"BENIGN"`) — `None`
+    when the dataset provides no label column. Stored here, *not* inside
+    `features`, so Step 22's training layer can supervise a model without
+    this ever becoming part of the ML feature vector — see
+    `app.services.feature_mapping`'s and `app.services.dataset_adapters.
+    label_mapping`'s docstrings for why label text is never a feature, and
+    how it is later turned into a benign/attack training target."""
+
+    attack_category: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    """The dataset's own attack-category text (e.g. UNSW-NB15's
+    `attack_cat`), when the dataset provides a column distinct from its
+    label — `None` otherwise. Metadata only, same as `label`."""
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

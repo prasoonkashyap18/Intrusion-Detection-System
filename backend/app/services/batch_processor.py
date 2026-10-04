@@ -230,8 +230,11 @@ def _run_feature_extraction(db: Session, batch_id: uuid.UUID, csv_path: Path) ->
     for record in ingest_batch(csv_path):
         records_ingested += 1
         if adapter is not None:
-            mapped = map_canonical_record(adapter.adapt(record))
-            persist_mapped_features(db, batch_id, mapped)
+            canonical = adapter.adapt(record)
+            mapped = map_canonical_record(canonical)
+            persist_mapped_features(
+                db, batch_id, mapped, label=canonical.label, attack_category=canonical.attack_category
+            )
             records_persisted += 1
         else:
             extract_features(record)
