@@ -1,9 +1,11 @@
 """API schemas for detection results.
 
 Independent of app.models.detection_result.DetectionResult (the ORM
-model) by design — see "Schema Separation" in backend/README.md. No
-guessed ML feature columns are included; only the fields the ORM model
-itself defines.
+model) by design — see "Schema Separation" in backend/README.md. Mirrors
+that model's real fields (Step 27) rather than a guessed shape; no API
+route is wired to these schemas yet (see backend/README.md's "Model
+Inference in Batch Processing" / "DetectionResult Persistence" sections —
+exposing predictions over an endpoint is explicitly a later step).
 """
 
 from __future__ import annotations
@@ -13,22 +15,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.enums import Severity
-
 
 class DetectionResultBase(BaseModel):
-    predicted_class: str
-    confidence: float = Field(ge=0.0, le=1.0)
-    severity: Severity
-
-    # Optional flow-context fields. Nullable because not every dataset
-    # provides all of them; no particular dataset's schema is assumed.
-    source_ip: str | None = None
-    destination_ip: str | None = None
-    source_port: int | None = None
-    destination_port: int | None = None
-    protocol: str | None = None
-    flow_timestamp: datetime | None = None
+    row_number: int
+    predicted_label: int = Field(ge=0, le=1)
+    prediction_name: str
+    attack_probability: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class DetectionResultResponse(DetectionResultBase):

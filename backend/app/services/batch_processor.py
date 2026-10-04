@@ -1,25 +1,24 @@
 """Batch-processing lifecycle: the pending -> processing transition, and (as
 of this step) CSV ingestion, dataset-schema recognition, feature mapping,
-feature persistence, and model inference as the real processing boundary.
+feature persistence, model inference, and detection-result persistence as
+the real processing boundary.
 
 Lifecycle (conservative on purpose — no other transitions are allowed yet):
 
     pending -> processing -> completed
     pending -> processing -> failed
 
-This module does not implement completed: nothing in this step persists a
-detection result, so a batch whose CSV ingests, feature-extracts, and (when
-applicable) runs inference cleanly is left `processing` rather than
-`completed` — marking it `completed` would claim a finished detection
-pipeline when the prediction it produced was never even recorded. **Running
-inference is not the same as completing detection**: Step 26 produces an
-in-memory `InferenceResult` and discards it once logged; nothing about that
-result is persisted, so there is nothing yet for `completed` to refer to.
-The existing status model has no state between "processing" and "completed"
-(e.g. an "inferred" status), and this step deliberately does not invent
-one; see "Processing boundary" below and backend/README.md for where a
-later step is expected to make the `processing -> completed` transition
-once it actually persists a detection result.
+This module does not implement completed: a batch whose CSV ingests,
+feature-extracts, and (when applicable) runs inference and persists its
+results cleanly is left `processing` rather than `completed`. Persisting a
+`DetectionResult` row per prediction (Step 27) is not the same thing as the
+system having decided a batch is "done" — there is still no risk/severity/
+alert concept, no review workflow, and no later step has yet defined what
+`completed` should mean for this pipeline. The existing status model has no
+state between "processing" and "completed" (e.g. a "detected" status), and
+this step deliberately does not invent one; see "Processing boundary" below
+and backend/README.md for where a later step is expected to make the
+`processing -> completed` transition.
 
 A batch reaches `failed` here if processing could not even start (its
 upload file is missing), its CSV fails to ingest (missing file, unreadable,
@@ -56,11 +55,11 @@ parses cleanly, without claiming a dataset identity nobody confirmed. No
 model inference is attempted in that case either — there is no persisted,
 FEATURE_SCHEMA-ordered data to run it on.
 
-Inference boundary (new in this step): `_run_model_inference`, called from
-`start_processing` right after `_run_feature_extraction` succeeds, runs only
-when the batch's dataset schema was recognized and at least one
-`MappedFeatureRecord` row was persisted for it. It loads *this batch's own*
-persisted feature vectors (via `app.services.feature_persistence.
+Inference boundary: `_run_model_inference`, called from `start_processing`
+right after `_run_feature_extraction` succeeds, runs only when the batch's
+dataset schema was recognized and at least one `MappedFeatureRecord` row
+was persisted for it. It loads *this batch's own* persisted feature
+vectors and their `row_number`s (via `app.services.feature_persistence.
 load_feature_vector`, batch-isolated by querying on `batch_id` — another
 batch's rows are never visible here), resolves a deterministic `READY`
 model from the existing registry (`app.models.model_metadata.ModelMetadata`
@@ -68,18 +67,26 @@ model from the existing registry (`app.models.model_metadata.ModelMetadata`
 `feature_set_version` match this batch's), and calls the existing
 `app.services.model_inference.predict_with_model` unchanged — this module
 never re-implements artifact loading, preprocessing, compatibility
-validation, or prediction; it only orchestrates. The resulting
-`InferenceResult` is logged (model identity, sample count, a benign/attack
-prediction count — real numbers from real predictions) and then discarded:
-**it is not persisted**. No `DetectionResult` model or table exists yet;
-that persistence, along with risk/severity/anomaly/confidence/alert
-concepts, is explicitly deferred to a later step. If no compatible `READY`
+validation, or prediction; it only orchestrates. If no compatible `READY`
 model exists, or the model's artifact is missing, corrupt, or otherwise
 unusable, this is treated as a processing failure (the batch becomes
 `failed`, with a safe, generic message) rather than silently skipped —
 inference was supposed to run and could not, which is different from the
 "dataset not recognized" case above where there was never anything to run
 it on.
+
+Detection-result persistence boundary (new in this step): once inference
+succeeds, `_run_model_inference` passes the resulting `InferenceResult`
+and the same `row_number`s to `app.services.detection_result_persistence.
+persist_detection_results`, which writes one `DetectionResult` row per
+prediction, each linked to this batch and the model that produced it —
+never re-running inference, never duplicating the feature vector (already
+on `MappedFeatureRecord`, reachable by `batch_id` + `row_number`). A
+persistence failure is likewise a processing failure (`failed`, safe
+message), handled the same way as an inference failure. `InferenceResult`
+is still only logged beyond that — nothing about *risk, severity, anomaly,
+confidence scoring, alerting*, or any detection-workflow concept is added
+by writing these rows; that remains explicitly deferred to later steps.
 
 Concurrency: the pending -> processing transition is one atomic
 `UPDATE ... WHERE status = 'pending'` statement (`claim_for_processing`
@@ -110,6 +117,7 @@ from app.models.mapped_feature_record import MappedFeatureRecord
 from app.models.model_metadata import ModelMetadata
 from app.services.batch_service import get_batch
 from app.services.dataset_adapters import select_adapter
+from app.services.detection_result_persistence import DetectionResultPersistenceError, persist_detection_results
 from app.services.feature_extraction import FEATURE_SCHEMA_VERSION, extract_features
 from app.services.feature_mapping import map_canonical_record
 from app.services.feature_persistence import load_feature_vector, persist_mapped_features
@@ -140,11 +148,11 @@ class ProcessingSummary:
 
     `records_persisted` is 0 whenever no dataset adapter recognized the
     batch's CSV header — persistence only happens for a recognized schema,
-    never a guessed one (see the module docstring). Model inference (see
-    `_run_model_inference`) is attempted only when `records_persisted > 0`;
-    its result is not part of this dataclass — it is produced, logged, and
-    discarded separately, since it describes a prediction outcome rather
-    than an ingestion/feature-extraction outcome.
+    never a guessed one (see the module docstring). Model inference and
+    detection-result persistence (see `_run_model_inference`) are
+    attempted only when `records_persisted > 0`; neither is part of this
+    dataclass — they describe a prediction outcome, not an ingestion/
+    feature-extraction outcome.
     """
 
     records_ingested: int
@@ -243,13 +251,14 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
         attack_count = sum(1 for p in inference_result.predictions if p.predicted_label == 1)
         logger.info(
             "Batch %s: inference completed with model %s v%s — %d sample(s) (%d benign, %d attack); "
-            "result is in-memory only and was not persisted",
+            "%d detection result(s) persisted",
             batch_id,
             inference_result.model_name,
             inference_result.model_version,
             inference_result.sample_count,
             benign_count,
             attack_count,
+            inference_result.sample_count,
         )
     return batch
 
@@ -329,17 +338,19 @@ def _run_model_inference(db: Session, batch_id: uuid.UUID, summary: ProcessingSu
 
     Raises `ApiException` (caught by `start_processing`'s existing error
     handling, same as any other processing failure) if no compatible
-    `READY` model is found, or if `predict_with_model` itself raises
-    `InferenceError` — both are processing failures once a schema has been
-    recognized and inference was supposed to run. Messages are safe (no
-    filesystem paths, no stack traces, no raw exception text); full detail
-    is logged server-side only.
+    `READY` model is found, if `predict_with_model` itself raises
+    `InferenceError`, or if persisting the resulting predictions as
+    `DetectionResult` rows fails (`DetectionResultPersistenceError`) —
+    all are processing failures once a schema has been recognized and
+    inference was supposed to run. Messages are safe (no filesystem
+    paths, no stack traces, no raw exception text); full detail is
+    logged server-side only.
     """
     if summary.records_persisted == 0 or summary.dataset_schema is None:
         logger.info("Batch %s: no persisted features to run inference on; skipping inference", batch_id)
         return None
 
-    feature_matrix = _load_feature_matrix_for_batch(db, batch_id)
+    feature_matrix, row_numbers = _load_feature_matrix_for_batch(db, batch_id)
     if not feature_matrix:
         logger.info("Batch %s: no persisted feature rows found; skipping inference", batch_id)
         return None
@@ -359,7 +370,7 @@ def _run_model_inference(db: Session, batch_id: uuid.UUID, summary: ProcessingSu
         )
 
     try:
-        return predict_with_model(
+        inference_result = predict_with_model(
             db,
             model.id,
             feature_matrix,
@@ -369,6 +380,16 @@ def _run_model_inference(db: Session, batch_id: uuid.UUID, summary: ProcessingSu
     except InferenceError:
         logger.exception("Batch %s: model inference failed", batch_id)
         raise ApiException(500, "inference_unavailable", "Unable to run model inference for this batch.") from None
+
+    try:
+        persist_detection_results(db, batch_id, inference_result, row_numbers)
+    except DetectionResultPersistenceError:
+        logger.exception("Batch %s: failed to persist detection results", batch_id)
+        raise ApiException(
+            500, "detection_result_persistence_unavailable", "Unable to persist detection results for this batch."
+        ) from None
+
+    return inference_result
 
 
 def _select_ready_model(db: Session, dataset_schema: str, feature_schema_version: str) -> ModelMetadata | None:
@@ -390,7 +411,7 @@ def _select_ready_model(db: Session, dataset_schema: str, feature_schema_version
     ).first()
 
 
-def _load_feature_matrix_for_batch(db: Session, batch_id: uuid.UUID) -> list[list[float | None]]:
+def _load_feature_matrix_for_batch(db: Session, batch_id: uuid.UUID) -> tuple[list[list[float | None]], list[int]]:
     """Loads *only* `batch_id`'s own persisted `MappedFeatureRecord` rows,
     in deterministic `row_number` order, as `FEATURE_SCHEMA`-ordered
     vectors via the existing `app.services.feature_persistence.
@@ -401,13 +422,19 @@ def _load_feature_matrix_for_batch(db: Session, batch_id: uuid.UUID) -> list[lis
     *training* set but wrong here — real inference input is typically
     unlabeled entirely, and excluding unlabeled rows would make inference
     silently predict on nothing. The `batch_id` filter below is the entire
-    batch-isolation guarantee: another batch's rows are never a match."""
+    batch-isolation guarantee: another batch's rows are never a match.
+
+    Returns `(feature_matrix, row_numbers)`, index-aligned: `row_numbers[i]`
+    is the `MappedFeatureRecord.row_number` that produced
+    `feature_matrix[i]` — the same pairing `_run_model_inference` later
+    hands to `persist_detection_results` so each `DetectionResult` row
+    traces back to the correct original row."""
     rows = db.scalars(
         select(MappedFeatureRecord)
         .where(MappedFeatureRecord.batch_id == batch_id)
         .order_by(MappedFeatureRecord.row_number)
     ).all()
-    return [load_feature_vector(row) for row in rows]
+    return [load_feature_vector(row) for row in rows], [row.row_number for row in rows]
 
 
 def _mark_failed(db: Session, batch: DetectionBatch, message: str) -> None:

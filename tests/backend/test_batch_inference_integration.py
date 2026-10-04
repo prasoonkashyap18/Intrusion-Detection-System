@@ -233,10 +233,12 @@ class TestBatchIsolation:
 
         from app.services.batch_processor import _load_feature_matrix_for_batch
 
-        matrix_a = _load_feature_matrix_for_batch(db_session, batch_a.id)
-        matrix_b = _load_feature_matrix_for_batch(db_session, batch_b.id)
+        matrix_a, row_numbers_a = _load_feature_matrix_for_batch(db_session, batch_a.id)
+        matrix_b, row_numbers_b = _load_feature_matrix_for_batch(db_session, batch_b.id)
         assert len(matrix_a) == 2
         assert len(matrix_b) == 1
+        assert row_numbers_a == [1, 2]
+        assert row_numbers_b == [1]
 
     def test_unrelated_batches_remain_unaffected(self, db_session, upload_dir, tmp_path):
         register_ready_model(db_session, tmp_path)
@@ -370,16 +372,19 @@ class TestEmptyFeatureData:
         assert result.status == ProcessingStatus.PROCESSING
 
 
-class TestNoDetectionResultPersistence:
-    def test_no_detection_result_rows_are_created(self, db_session, upload_dir, tmp_path):
-        from sqlalchemy import func
-
+class TestDetectionResultPersistence:
+    # As of Step 27, a successful batch persists one DetectionResult per
+    # inferred row (see tests/backend/test_detection_result_persistence.py
+    # for the dedicated, focused coverage of that persistence service).
+    def test_detection_result_rows_are_created_for_a_successful_batch(self, db_session, upload_dir, tmp_path):
         register_ready_model(db_session, tmp_path)
         batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
 
         start_processing(db_session, batch.id, upload_dir)
 
-        assert db_session.scalar(select(func.count()).select_from(DetectionResult)) == 0
+        rows = db_session.scalars(select(DetectionResult).where(DetectionResult.batch_id == batch.id)).all()
+        assert len(rows) == 2
+        assert {r.row_number for r in rows} == {1, 2}
 
 
 class TestExistingBehaviorIntact:

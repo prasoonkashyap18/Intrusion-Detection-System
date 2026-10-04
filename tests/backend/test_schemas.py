@@ -16,21 +16,16 @@ from pydantic import ValidationError
 
 from app.schemas.batch import DetectionBatchSummary
 from app.schemas.detection import DetectionResultBase, DetectionResultResponse
-from app.schemas.enums import ProcessingStatus, Severity
+from app.schemas.enums import ProcessingStatus
 from app.schemas.model import ModelMetadataResponse
 
 
 def _valid_detection_kwargs(**overrides):
     kwargs = dict(
-        predicted_class="normal",
-        confidence=0.75,
-        severity=Severity.LOW,
-        source_ip="10.0.0.1",
-        destination_ip="10.0.0.2",
-        source_port=1234,
-        destination_port=80,
-        protocol="TCP",
-        flow_timestamp=datetime.now(timezone.utc),
+        row_number=1,
+        predicted_label=1,
+        prediction_name="attack",
+        attack_probability=0.75,
     )
     kwargs.update(overrides)
     return kwargs
@@ -38,32 +33,33 @@ def _valid_detection_kwargs(**overrides):
 
 def test_valid_detection_result_data_is_accepted():
     schema = DetectionResultBase(**_valid_detection_kwargs())
-    assert schema.predicted_class == "normal"
-    assert schema.confidence == 0.75
-    assert schema.severity == Severity.LOW
+    assert schema.row_number == 1
+    assert schema.predicted_label == 1
+    assert schema.prediction_name == "attack"
+    assert schema.attack_probability == 0.75
 
 
 @pytest.mark.parametrize("value", [0.0, 0.5, 1.0])
-def test_confidence_within_range_is_accepted(value):
-    schema = DetectionResultBase(**_valid_detection_kwargs(confidence=value))
-    assert schema.confidence == value
+def test_attack_probability_within_range_is_accepted(value):
+    schema = DetectionResultBase(**_valid_detection_kwargs(attack_probability=value))
+    assert schema.attack_probability == value
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1, -5, 2])
-def test_confidence_outside_range_is_rejected(value):
+def test_attack_probability_outside_range_is_rejected(value):
     with pytest.raises(ValidationError):
-        DetectionResultBase(**_valid_detection_kwargs(confidence=value))
+        DetectionResultBase(**_valid_detection_kwargs(attack_probability=value))
 
 
-@pytest.mark.parametrize("value", ["low", "medium", "high", "critical"])
-def test_valid_severity_values_are_accepted(value):
-    schema = DetectionResultBase(**_valid_detection_kwargs(severity=value))
-    assert schema.severity == Severity(value)
+@pytest.mark.parametrize("value", [0, 1])
+def test_valid_predicted_label_values_are_accepted(value):
+    schema = DetectionResultBase(**_valid_detection_kwargs(predicted_label=value))
+    assert schema.predicted_label == value
 
 
-def test_invalid_severity_value_is_rejected():
+def test_invalid_predicted_label_value_is_rejected():
     with pytest.raises(ValidationError):
-        DetectionResultBase(**_valid_detection_kwargs(severity="super-critical"))
+        DetectionResultBase(**_valid_detection_kwargs(predicted_label=2))
 
 
 @pytest.mark.parametrize("value", ["pending", "processing", "completed", "failed"])
@@ -93,18 +89,13 @@ def test_invalid_batch_status_is_rejected():
         )
 
 
-def test_optional_network_fields_can_be_null():
+def test_attack_probability_can_be_null():
     schema = DetectionResultBase(
-        predicted_class="normal",
-        confidence=0.5,
-        severity=Severity.LOW,
+        row_number=1,
+        predicted_label=0,
+        prediction_name="benign",
     )
-    assert schema.source_ip is None
-    assert schema.destination_ip is None
-    assert schema.source_port is None
-    assert schema.destination_port is None
-    assert schema.protocol is None
-    assert schema.flow_timestamp is None
+    assert schema.attack_probability is None
 
 
 def test_model_metadata_can_contain_null_evaluation_metrics():
@@ -121,7 +112,6 @@ def test_model_metadata_can_contain_null_evaluation_metrics():
 def test_detection_result_response_converts_from_orm_object(db_session):
     from app.models.detection_batch import DetectionBatch
     from app.models.detection_result import DetectionResult
-    from app.models.enums import Severity as ORMSeverity
     from app.models.model_metadata import ModelMetadata
 
     batch = DetectionBatch(filename="sample.csv")
@@ -132,9 +122,10 @@ def test_detection_result_response_converts_from_orm_object(db_session):
     result = DetectionResult(
         batch_id=batch.id,
         model_id=model.id,
-        predicted_class="dos",
-        confidence=0.93,
-        severity=ORMSeverity.HIGH,
+        row_number=1,
+        predicted_label=1,
+        prediction_name="attack",
+        attack_probability=0.93,
     )
     db_session.add(result)
     db_session.commit()
@@ -145,14 +136,13 @@ def test_detection_result_response_converts_from_orm_object(db_session):
     assert response.id == result.id
     assert response.batch_id == batch.id
     assert response.model_id == model.id
-    assert response.predicted_class == "dos"
-    assert response.severity == Severity.HIGH
+    assert response.prediction_name == "attack"
+    assert response.attack_probability == pytest.approx(0.93)
 
 
 def test_detection_result_response_serializes_to_json_compatible_data(db_session):
     from app.models.detection_batch import DetectionBatch
     from app.models.detection_result import DetectionResult
-    from app.models.enums import Severity as ORMSeverity
     from app.models.model_metadata import ModelMetadata
 
     batch = DetectionBatch(filename="sample.csv")
@@ -163,9 +153,9 @@ def test_detection_result_response_serializes_to_json_compatible_data(db_session
     result = DetectionResult(
         batch_id=batch.id,
         model_id=model.id,
-        predicted_class="normal",
-        confidence=0.42,
-        severity=ORMSeverity.LOW,
+        row_number=1,
+        predicted_label=0,
+        prediction_name="benign",
     )
     db_session.add(result)
     db_session.commit()
@@ -177,9 +167,8 @@ def test_detection_result_response_serializes_to_json_compatible_data(db_session
     assert isinstance(payload["id"], str)
     assert isinstance(payload["batch_id"], str)
     assert isinstance(payload["model_id"], str)
-    assert isinstance(payload["confidence"], float)
-    assert payload["severity"] == "low"
-    assert payload["source_ip"] is None
+    assert payload["prediction_name"] == "benign"
+    assert payload["attack_probability"] is None
 
 
 def test_model_metadata_response_omits_artifact_path(db_session):
