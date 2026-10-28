@@ -1,9 +1,10 @@
 """Bootstraps a demo-ready AI-IDS environment after a fresh or reset
-development database: trains and registers one baseline model through the
-exact same ingestion -> dataset-adaptation -> feature-persistence ->
-training pipeline a real CSV upload already goes through (see
-`app.services.batch_processor`, `app.services.training_data`,
-`app.services.model_training`) — nothing here is a shortcut, a different
+development database: trains and registers one baseline supervised model
+and one anomaly detector through the exact same ingestion -> dataset-
+adaptation -> feature-persistence -> training pipeline a real CSV upload
+already goes through (see `app.services.batch_processor`, `app.services.
+training_data`, `app.services.model_training`, `app.services.
+anomaly_detection_training`) — nothing here is a shortcut, a different
 code path, or a fabricated result.
 
 Run from the backend/ directory with its virtual environment active:
@@ -55,8 +56,11 @@ from app.db.database import SessionLocal, init_db  # noqa: E402
 from app.models.detection_batch import DetectionBatch  # noqa: E402
 from app.models.enums import ModelStatus, ProcessingStatus  # noqa: E402
 from app.models.model_metadata import ModelMetadata  # noqa: E402
+from app.services.anomaly_detection_training import MODEL_TYPE as ANOMALY_MODEL_TYPE  # noqa: E402
+from app.services.anomaly_detection_training import train_anomaly_detector  # noqa: E402
 from app.services.batch_processor import _run_feature_extraction, claim_for_processing  # noqa: E402
 from app.services.feature_extraction import FEATURE_SCHEMA_VERSION  # noqa: E402
+from app.services.model_training import MODEL_TYPE as SUPERVISED_MODEL_TYPE  # noqa: E402
 from app.services.model_training import train_baseline_model  # noqa: E402
 from app.services.training_data import load_training_data  # noqa: E402
 
@@ -86,11 +90,12 @@ def _generate_demo_csv() -> bytes:
     return "\n".join(lines).encode()
 
 
-def _find_existing_ready_model(db) -> ModelMetadata | None:
+def _find_existing_ready_model(db, model_type: str) -> ModelMetadata | None:
     return (
         db.query(ModelMetadata)
         .filter(
             ModelMetadata.status == ModelStatus.READY,
+            ModelMetadata.model_type == model_type,
             ModelMetadata.dataset_name == DATASET_SCHEMA,
             ModelMetadata.feature_set_version == FEATURE_SCHEMA_VERSION,
         )
@@ -103,12 +108,20 @@ def main() -> None:
     init_db()
     db = SessionLocal()
     try:
-        existing = _find_existing_ready_model(db)
-        if existing is not None:
+        existing_supervised = _find_existing_ready_model(db, SUPERVISED_MODEL_TYPE)
+        existing_anomaly = _find_existing_ready_model(db, ANOMALY_MODEL_TYPE)
+        if existing_supervised is not None:
             print(
-                f"A compatible READY model already exists: {existing.model_name} v{existing.model_version} "
-                f"({existing.id}). Nothing to do."
+                f"A compatible READY supervised model already exists: {existing_supervised.model_name} "
+                f"v{existing_supervised.model_version} ({existing_supervised.id})."
             )
+        if existing_anomaly is not None:
+            print(
+                f"A compatible READY anomaly detector already exists: {existing_anomaly.model_name} "
+                f"v{existing_anomaly.model_version} ({existing_anomaly.id})."
+            )
+        if existing_supervised is not None and existing_anomaly is not None:
+            print("Nothing to do.")
             return
 
         upload_dir = Path(settings.upload_dir)
@@ -143,29 +156,50 @@ def main() -> None:
         )
 
         artifact_dir = Path(settings.model_artifact_dir)
-        result = train_baseline_model(
-            db,
-            dataset,
-            model_name="ai-ids-baseline",
-            artifact_dir=artifact_dir,
-            test_fraction=0.0,
-            group_by_batch=False,
-        )
 
-        print()
-        print("Trained and registered a new READY model:")
-        print(f"  model_id:      {result.model_id}")
-        print(f"  name/version:  {result.model_name} v{result.model_version}")
-        print(f"  dataset:       {result.dataset_schema} (feature schema v{result.feature_schema_version})")
-        print(f"  train/val:     {result.training_sample_count} / {result.validation_sample_count} samples")
-        print(f"  class counts:  {result.class_distribution}")
-        print(f"  validation:    {result.validation_metrics}  (this run's own held-out split, synthetic data)")
-        print(f"  artifact:      {result.artifact_path}")
+        if existing_supervised is None:
+            result = train_baseline_model(
+                db,
+                dataset,
+                model_name="ai-ids-baseline",
+                artifact_dir=artifact_dir,
+                test_fraction=0.0,
+                group_by_batch=False,
+            )
+            print()
+            print("Trained and registered a new READY supervised model:")
+            print(f"  model_id:      {result.model_id}")
+            print(f"  name/version:  {result.model_name} v{result.model_version}")
+            print(f"  dataset:       {result.dataset_schema} (feature schema v{result.feature_schema_version})")
+            print(f"  train/val:     {result.training_sample_count} / {result.validation_sample_count} samples")
+            print(f"  class counts:  {result.class_distribution}")
+            print(f"  validation:    {result.validation_metrics}  (this run's own held-out split, synthetic data)")
+            print(f"  artifact:      {result.artifact_path}")
+
+        if existing_anomaly is None:
+            anomaly_result = train_anomaly_detector(
+                db,
+                dataset,
+                model_name="ai-ids-anomaly-detector",
+                artifact_dir=artifact_dir,
+            )
+            print()
+            print("Trained and registered a new READY anomaly detector:")
+            print(f"  model_id:      {anomaly_result.model_id}")
+            print(f"  name/version:  {anomaly_result.model_name} v{anomaly_result.model_version}")
+            print(f"  dataset:       {anomaly_result.dataset_schema} (feature schema v{anomaly_result.feature_schema_version})")
+            print(f"  train/val:     {anomaly_result.training_sample_count} / {anomaly_result.validation_sample_count} samples (BENIGN only)")
+            print(
+                f"  validation:    normal_rate={anomaly_result.validation_normal_rate:.2f}  "
+                "(this run's own held-out split, synthetic data — not a production false-positive-rate claim)"
+            )
+            print(f"  artifact:      {anomaly_result.artifact_path}")
+
         print()
         print(
             "Upload a compatible NSL-KDD-style CSV (columns: duration, protocol_type, "
             "service, flag, src_bytes, dst_bytes, class) through the API or frontend and "
-            "process it to see real predictions from this model."
+            "process it to see real predictions from these models."
         )
     finally:
         db.close()

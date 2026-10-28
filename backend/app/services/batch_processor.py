@@ -75,18 +75,35 @@ inference was supposed to run and could not, which is different from the
 "dataset not recognized" case above where there was never anything to run
 it on.
 
-Detection-result persistence boundary (new in this step): once inference
-succeeds, `_run_model_inference` passes the resulting `InferenceResult`
-and the same `row_number`s to `app.services.detection_result_persistence.
+Detection-result persistence boundary: once inference succeeds,
+`_run_model_inference` passes the resulting `InferenceResult` and the
+same `row_number`s to `app.services.detection_result_persistence.
 persist_detection_results`, which writes one `DetectionResult` row per
 prediction, each linked to this batch and the model that produced it —
 never re-running inference, never duplicating the feature vector (already
 on `MappedFeatureRecord`, reachable by `batch_id` + `row_number`). A
 persistence failure is likewise a processing failure (`failed`, safe
 message), handled the same way as an inference failure. `InferenceResult`
-is still only logged beyond that — nothing about *risk, severity, anomaly,
+is still only logged beyond that — nothing about *risk, severity,
 confidence scoring, alerting*, or any detection-workflow concept is added
-by writing these rows; that remains explicitly deferred to later steps.
+by writing these rows.
+
+Anomaly-detection boundary (new in this step): `_run_anomaly_detection`,
+called from `start_processing` right after the supervised inference
+block, is a second, entirely independent analysis pass using the same
+batch-isolated feature vectors but a completely separate `IsolationForest`
+model family (`app.services.anomaly_detection_training`/`app.services.
+anomaly_inference`, `model_type="isolation_forest"` in the same
+`ModelMetadata` registry table — never confused with the supervised
+`"random_forest"` rows; see `SUPERVISED_MODEL_TYPE`/`ANOMALY_MODEL_TYPE`
+below). Unlike supervised inference, this pass is deliberately
+best-effort and never fails the batch: no compatible `READY` anomaly
+detector, or any failure during anomaly detection itself, is caught,
+logged, and skipped, so a batch that would have succeeded before Step 31
+existed keeps succeeding identically. Its result (when produced) is
+logged only — like Step 26's supervised `InferenceResult` before Step 27
+added persistence, nothing from anomaly detection is written to the
+database or exposed through any API in this step.
 
 Concurrency: the pending -> processing transition is one atomic
 `UPDATE ... WHERE status = 'pending'` statement (`claim_for_processing`
@@ -115,6 +132,8 @@ from app.models.detection_batch import DetectionBatch
 from app.models.enums import ModelStatus, ProcessingStatus
 from app.models.mapped_feature_record import MappedFeatureRecord
 from app.models.model_metadata import ModelMetadata
+from app.services.anomaly_detection_training import MODEL_TYPE as ANOMALY_MODEL_TYPE
+from app.services.anomaly_inference import AnomalyInferenceError, AnomalyInferenceResult, predict_anomalies_with_model
 from app.services.batch_service import get_batch
 from app.services.dataset_adapters import select_adapter
 from app.services.detection_result_persistence import DetectionResultPersistenceError, persist_detection_results
@@ -260,6 +279,23 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
             attack_count,
             inference_result.sample_count,
         )
+
+    # Step 31: an independent, best-effort analysis layer — never affects
+    # the batch's resulting status, and its result is logged only (see
+    # _run_anomaly_detection's docstring and backend/README.md).
+    anomaly_result = _run_anomaly_detection(db, batch_id, summary)
+    if anomaly_result is not None:
+        anomaly_count = sum(1 for p in anomaly_result.predictions if p.is_anomaly)
+        logger.info(
+            "Batch %s: anomaly detection completed with model %s v%s — %d sample(s), %d flagged anomalous "
+            "(result is in-memory only and was not persisted)",
+            batch_id,
+            anomaly_result.model_name,
+            anomaly_result.model_version,
+            anomaly_result.sample_count,
+            anomaly_count,
+        )
+
     return batch
 
 
@@ -392,18 +428,106 @@ def _run_model_inference(db: Session, batch_id: uuid.UUID, summary: ProcessingSu
     return inference_result
 
 
+def _run_anomaly_detection(db: Session, batch_id: uuid.UUID, summary: ProcessingSummary) -> AnomalyInferenceResult | None:
+    """Runs the existing `app.services.anomaly_inference.
+    predict_anomalies_with_model` service over *this batch's own*
+    persisted feature vectors — the same orchestration-only pattern
+    `_run_model_inference` follows, over a completely independent model
+    family (see `app.services.anomaly_detection_training`'s module
+    docstring).
+
+    Deliberately best-effort and non-fatal, unlike `_run_model_inference`:
+    anomaly detection is an additional, independent analysis layer Step 31
+    introduces, not a requirement the supervised pipeline already promised.
+    A batch whose feature extraction and supervised inference succeeded
+    must keep succeeding exactly as it did before Step 31 existed, even
+    when no compatible anomaly detector has been trained yet, or anomaly
+    detection itself fails unexpectedly — changing that would be exactly
+    the "change existing classification behavior" this step must not do.
+    Every failure path here is caught, logged server-side, and returns
+    `None`; nothing propagates to `start_processing`.
+
+    Returns `None` when there is nothing to run anomaly detection on (no
+    recognized schema, no persisted features), when no compatible `READY`
+    anomaly detector exists, or when anomaly detection itself raises
+    `AnomalyInferenceError` or any other unexpected exception. The result,
+    when produced, is logged only — never persisted (no `DetectionResult`
+    row, no new table) and never returned through any API; see
+    backend/README.md's explicit Step 31 scope.
+    """
+    if summary.records_persisted == 0 or summary.dataset_schema is None:
+        return None
+
+    try:
+        feature_matrix, _row_numbers = _load_feature_matrix_for_batch(db, batch_id)
+        if not feature_matrix:
+            return None
+
+        model = _select_ready_anomaly_model(db, summary.dataset_schema, summary.feature_schema_version)
+        if model is None:
+            logger.info(
+                "Batch %s: no READY anomaly detector compatible with dataset_schema=%s, "
+                "feature_schema_version=%s; skipping anomaly detection",
+                batch_id,
+                summary.dataset_schema,
+                summary.feature_schema_version,
+            )
+            return None
+
+        return predict_anomalies_with_model(
+            db,
+            model.id,
+            feature_matrix,
+            feature_schema_version=summary.feature_schema_version,
+            dataset_schema=summary.dataset_schema,
+        )
+    except AnomalyInferenceError:
+        logger.exception("Batch %s: anomaly detection failed; continuing without it", batch_id)
+        return None
+    except Exception:
+        logger.exception("Batch %s: unexpected error during anomaly detection; continuing without it", batch_id)
+        return None
+
+
+SUPERVISED_MODEL_TYPE = "random_forest"
+"""Matches `app.services.model_training.MODEL_TYPE`. Filtering on this
+explicitly (added alongside Step 31's anomaly detector) is what keeps
+`_select_ready_model` from ever handing the supervised inference path an
+`isolation_forest` row — both model families now share the same
+`ModelMetadata` registry table, distinguished only by this column."""
+
+
 def _select_ready_model(db: Session, dataset_schema: str, feature_schema_version: str) -> ModelMetadata | None:
-    """Deterministically selects one `READY` model compatible with
-    `dataset_schema`/`feature_schema_version`: the most recently
-    registered match (`created_at` descending), with ties broken by `id`
-    descending so the choice never depends on query-plan or insertion-
-    order happenstance. Does not fabricate a match, train one, or fall
-    back to an incompatible model — `None` means "nothing suitable
-    exists," left for the caller to handle."""
+    """Deterministically selects one `READY` supervised (`random_forest`)
+    model compatible with `dataset_schema`/`feature_schema_version`: the
+    most recently registered match (`created_at` descending), with ties
+    broken by `id` descending so the choice never depends on query-plan or
+    insertion-order happenstance. Does not fabricate a match, train one,
+    or fall back to an incompatible model — `None` means "nothing
+    suitable exists," left for the caller to handle."""
     return db.scalars(
         select(ModelMetadata)
         .where(
             ModelMetadata.status == ModelStatus.READY,
+            ModelMetadata.model_type == SUPERVISED_MODEL_TYPE,
+            ModelMetadata.dataset_name == dataset_schema,
+            ModelMetadata.feature_set_version == feature_schema_version,
+        )
+        .order_by(ModelMetadata.created_at.desc(), ModelMetadata.id.desc())
+    ).first()
+
+
+def _select_ready_anomaly_model(db: Session, dataset_schema: str, feature_schema_version: str) -> ModelMetadata | None:
+    """The anomaly-detector counterpart to `_select_ready_model`: same
+    deterministic "most recently registered compatible match" rule,
+    filtered to `model_type="isolation_forest"` (see
+    `app.services.anomaly_detection_training.MODEL_TYPE`) so it can never
+    select the supervised classifier."""
+    return db.scalars(
+        select(ModelMetadata)
+        .where(
+            ModelMetadata.status == ModelStatus.READY,
+            ModelMetadata.model_type == ANOMALY_MODEL_TYPE,
             ModelMetadata.dataset_name == dataset_schema,
             ModelMetadata.feature_set_version == feature_schema_version,
         )
