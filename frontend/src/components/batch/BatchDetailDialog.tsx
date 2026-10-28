@@ -1,13 +1,14 @@
-import { Check, Copy, ShieldQuestion, X } from 'lucide-react'
+import { Check, Copy, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useBatchDetail } from '../../hooks/useBatchDetail'
 import { useBatchProcessing } from '../../hooks/useBatchProcessing'
 import type { DetectionBatch } from '../../types/detection'
 import { formatCount, formatLocalDateTime, formatUtcDateTime } from '../../utils/format'
-import { EmptyState, ErrorState, LoadingState } from '../states'
+import { ErrorState, LoadingState } from '../states'
 import { Button } from '../ui/Button'
 import { StatusDot } from '../ui/StatusDot'
 import { STATUS_PRESENTATION } from './batchStatus'
+import { DetectionResultsSection } from './DetectionResultsSection'
 
 interface BatchDetailDialogProps {
   batchId: string
@@ -166,12 +167,7 @@ function BatchDetailBody({ batch, onProcessed }: { batch: DetectionBatch; onProc
       </div>
 
       <div className="border-t border-graphite-900/6 pt-5">
-        <EmptyState
-          compact
-          icon={ShieldQuestion}
-          title="No detection results yet"
-          description="This batch has not been analyzed. Results will appear here once the detection pipeline exists."
-        />
+        <DetectionResultsSection batchId={batch.batch_id} />
       </div>
     </div>
   )

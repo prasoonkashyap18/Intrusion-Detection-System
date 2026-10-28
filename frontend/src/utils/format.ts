@@ -31,6 +31,11 @@ export function formatCount(value: number): string {
   return value.toLocaleString('en-US')
 }
 
+/** A probability in [0, 1] as a rounded percentage, e.g. 0.873 -> "87%". */
+export function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`
+}
+
 /** Readable local-time stamp, e.g. "03 Oct 2026, 02:45 PM". Returns the input unchanged if it is not a valid date. */
 export function formatLocalDateTime(iso: string): string {
   const date = new Date(iso)

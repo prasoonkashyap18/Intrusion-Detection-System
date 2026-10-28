@@ -49,7 +49,7 @@ describe('BatchDetailDialog — success', () => {
     expect(within(body).getByText('03 Oct 2026, 02:45 PM')).toBeInTheDocument()
     expect(within(body).getByText('Not yet completed')).toBeInTheDocument()
     expect(within(body).getByText(batch.batch_id)).toBeInTheDocument()
-    expect(within(body).getByText('No detection results yet')).toBeInTheDocument()
+    expect(await within(body).findByText('No detection results yet')).toBeInTheDocument()
     expect(body.textContent).not.toMatch(/threat|attack|risk|confidence|severity|score|%/i)
   })
 
@@ -136,7 +136,12 @@ describe('BatchDetailDialog — failure and retry', () => {
   it('recovers after Retry once the backend succeeds', async () => {
     let attempt = 0
     const batch = batchItem({ filename: 'recovered.csv' })
-    stubFetch(() => {
+    stubFetch((input) => {
+      if (String(input).includes('/results')) {
+        return Promise.resolve(
+          jsonResponse({ items: [], batch_id: batch.batch_id, page: 1, page_size: 20, total_items: 0, total_pages: 0 }),
+        )
+      }
       attempt += 1
       return Promise.resolve(
         attempt === 1
@@ -259,6 +264,11 @@ describe('BatchDetailDialog — starting processing', () => {
     stubFetch((input) => {
       if (String(input).endsWith('/process')) {
         return Promise.resolve(jsonResponse({ error: 'invalid_batch_state', message: 'Batch is already processing.' }, 409))
+      }
+      if (String(input).includes('/results')) {
+        return Promise.resolve(
+          jsonResponse({ items: [], batch_id: batch.batch_id, page: 1, page_size: 20, total_items: 0, total_pages: 0 }),
+        )
       }
       return Promise.resolve(jsonResponse(batch))
     })

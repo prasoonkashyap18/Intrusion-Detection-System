@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { DetectionBatch, UploadBatchResponse } from '@/types/detection'
+import type { DetectionBatch, DetectionResult, UploadBatchResponse } from '@/types/detection'
 
 /** jsdom has no matchMedia; components query it for reduced-motion and pointer type. */
 export function stubMatchMedia(prefersReducedMotion = false) {
@@ -61,14 +61,43 @@ export function batchItem(overrides: Partial<DetectionBatch> = {}): DetectionBat
   return { ...batchResponse(), completed_at: null, ...overrides }
 }
 
+export function resultItem(overrides: Partial<DetectionResult> = {}): DetectionResult {
+  return {
+    id: '7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+    batch_id: '3f2b8c1e-6a4d-4e0b-9d7a-2c5f1a8b9e30',
+    model_id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+    model_name: 'ai-ids-baseline',
+    model_version: '20261003T000000Z',
+    row_number: 1,
+    predicted_label: 0,
+    prediction_name: 'benign',
+    attack_probability: 0.12,
+    created_at: '2026-10-03T08:15:30Z',
+    ...overrides,
+  }
+}
+
+/** `count` results for `batchId`, row 1..count, one second apart. */
+export function manyResults(batchId: string, count: number): DetectionResult[] {
+  return Array.from({ length: count }, (_, i) =>
+    resultItem({
+      id: `00000000-0000-4000-9000-${String(i + 1).padStart(12, '0')}`,
+      batch_id: batchId,
+      row_number: i + 1,
+      created_at: new Date(Date.UTC(2026, 9, 3, 8, 0, i + 1)).toISOString(),
+    }),
+  )
+}
+
 /**
  * A stateful stand-in for the backend's detection endpoints, used only in
  * tests. It pages newest-first like the real endpoint, and uploads add a batch
  * to the same store, so tests can prove the UI reads persisted data rather
  * than holding its own copy.
  */
-export function stubBackend(initial: DetectionBatch[] = []) {
+export function stubBackend(initial: DetectionBatch[] = [], initialResults: DetectionResult[] = []) {
   const store: DetectionBatch[] = [...initial] // newest first
+  const resultsStore: DetectionResult[] = [...initialResults]
   let uploads = 0
 
   const fetchMock = stubFetch((input, init) => {
@@ -76,6 +105,38 @@ export function stubBackend(initial: DetectionBatch[] = []) {
     const method = init?.method ?? 'GET'
     const detailMatch = /\/detection\/batches\/([^/]+)$/.exec(url.pathname)
     const processMatch = /\/detection\/batches\/([^/]+)\/process$/.exec(url.pathname)
+    const resultsListMatch = /\/detection\/batches\/([^/]+)\/results$/.exec(url.pathname)
+    const resultMatch = /\/detection\/results\/([^/]+)$/.exec(url.pathname)
+
+    if (resultsListMatch && method === 'GET') {
+      const batchId = decodeURIComponent(resultsListMatch[1] ?? '')
+      if (!store.some((batch) => batch.batch_id === batchId)) {
+        return Promise.resolve(jsonResponse({ error: 'batch_not_found', message: 'No batch was found with that ID.' }, 404))
+      }
+      const page = Number(url.searchParams.get('page')) || 1
+      const pageSize = Number(url.searchParams.get('page_size')) || 20
+      const matching = resultsStore.filter((result) => result.batch_id === batchId)
+      return Promise.resolve(
+        jsonResponse({
+          items: matching.slice((page - 1) * pageSize, page * pageSize),
+          batch_id: batchId,
+          page,
+          page_size: pageSize,
+          total_items: matching.length,
+          total_pages: Math.ceil(matching.length / pageSize),
+        }),
+      )
+    }
+
+    if (resultMatch && method === 'GET') {
+      const resultId = decodeURIComponent(resultMatch[1] ?? '')
+      const found = resultsStore.find((result) => result.id === resultId)
+      return Promise.resolve(
+        found
+          ? jsonResponse(found)
+          : jsonResponse({ error: 'detection_result_not_found', message: 'No detection result was found with that ID.' }, 404),
+      )
+    }
 
     if (url.pathname.endsWith('/detection/batches') && method === 'GET') {
       const page = Number(url.searchParams.get('page'))
@@ -138,7 +199,7 @@ export function stubBackend(initial: DetectionBatch[] = []) {
     return Promise.resolve(jsonResponse({ error: 'not_found', message: 'Not found.' }, 404))
   })
 
-  return { store, fetchMock }
+  return { store, resultsStore, fetchMock }
 }
 
 /** `count` batches, newest first: batch-<count> down to batch-1, one minute apart. */

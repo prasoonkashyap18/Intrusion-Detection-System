@@ -48,3 +48,37 @@ export interface BatchProcessingResponse {
   status: ProcessingStatus
   message: string
 }
+
+/** The binary prediction a trained model reported for one row. */
+export type PredictionName = 'benign' | 'attack'
+
+/**
+ * One persisted prediction (`GET /api/v1/detection/batches/{batchId}/results`,
+ * `GET /api/v1/detection/results/{resultId}`) — a real model output for one
+ * original CSV row, not a guaranteed classification of that traffic.
+ */
+export interface DetectionResult {
+  id: string
+  batch_id: string
+  model_id: string
+  model_name: string
+  model_version: string
+  /** The original row this prediction was made for, 1-based. */
+  row_number: number
+  /** `0` (benign) or `1` (attack) — `prediction_name` is the same value, spelled out. */
+  predicted_label: 0 | 1
+  prediction_name: PredictionName
+  /**
+   * Probability of ATTACK, in `[0, 1]`, only when the model genuinely
+   * supports it — `null` otherwise. Never treat `null` as `0`.
+   */
+  attack_probability: number | null
+  /** ISO 8601 timestamp in UTC. */
+  created_at: string
+}
+
+/** One page of a single batch's detection results, ordered by row_number. */
+export interface DetectionResultListResponse extends Pagination {
+  items: DetectionResult[]
+  batch_id: string
+}

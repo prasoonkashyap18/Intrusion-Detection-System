@@ -1,5 +1,12 @@
 export { getJson, request, type RequestOptions, type ResponseValidator } from './api'
 export { ApiError, isApiError, type ApiErrorCode } from './apiError'
 export { API_BASE_URL, API_V1_PREFIX, DEFAULT_TIMEOUT_MS, MAX_UPLOAD_BYTES } from './config'
-export { getDetectionBatch, getDetectionBatches, startBatchProcessing, uploadDetectionCsv } from './detection'
+export {
+  getDetectionBatch,
+  getDetectionBatches,
+  getDetectionResult,
+  getDetectionResults,
+  startBatchProcessing,
+  uploadDetectionCsv,
+} from './detection'
 export { getHealth } from './health'
