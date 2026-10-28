@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
+from app.models.anomaly_result import AnomalyResult
 from app.models.detection_batch import DetectionBatch
 from app.models.detection_result import DetectionResult
 from app.models.enums import ModelStatus, ProcessingStatus
@@ -177,13 +178,13 @@ class TestAnomalyDetectionRunsIndependently:
         assert len(rows) == 2
 
 
-class TestAnomalyDetectionDoesNotPersistOrLeak:
+class TestAnomalyDetectionDoesNotLeakIntoSupervisedResults:
     def test_no_detection_result_rows_are_created_from_anomaly_predictions(self, db_session, upload_dir, tmp_path):
         # Register ONLY an anomaly detector (no supervised model), so any
         # DetectionResult rows that appear could only have come from
         # anomaly detection — there must be none, since supervised
         # inference will fail (no compatible model) and anomaly detection
-        # never persists anything regardless.
+        # never writes to the DetectionResult table regardless.
         register_ready_anomaly_model(db_session, tmp_path)
         batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
 
@@ -202,6 +203,77 @@ class TestAnomalyDetectionDoesNotPersistOrLeak:
         result = start_processing(db_session, batch.id, upload_dir)
 
         assert result.status == ProcessingStatus.FAILED
+
+
+class TestAnomalyResultPersistence:
+    def test_anomaly_result_rows_are_persisted_when_a_compatible_detector_exists(self, db_session, upload_dir, tmp_path):
+        register_ready_supervised_model(db_session, tmp_path)
+        anomaly = register_ready_anomaly_model(db_session, tmp_path)
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
+
+        start_processing(db_session, batch.id, upload_dir)
+
+        rows = db_session.scalars(select(AnomalyResult).where(AnomalyResult.batch_id == batch.id)).all()
+        assert len(rows) == 2
+        assert all(r.model_id == anomaly.model_id for r in rows)
+        assert {r.row_number for r in rows} == {1, 2}
+
+    def test_no_anomaly_result_rows_when_no_anomaly_detector_exists(self, db_session, upload_dir, tmp_path):
+        register_ready_supervised_model(db_session, tmp_path)
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
+
+        start_processing(db_session, batch.id, upload_dir)
+
+        rows = db_session.scalars(select(AnomalyResult).where(AnomalyResult.batch_id == batch.id)).all()
+        assert rows == []
+
+    def test_a_persistence_failure_does_not_fail_the_batch_or_supervised_results(
+        self, db_session, upload_dir, tmp_path, monkeypatch
+    ):
+        supervised = register_ready_supervised_model(db_session, tmp_path)
+        register_ready_anomaly_model(db_session, tmp_path)
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
+
+        def failing_persist(*args, **kwargs):
+            raise RuntimeError("simulated anomaly-result persistence failure")
+
+        monkeypatch.setattr(batch_processor, "persist_anomaly_results", failing_persist)
+
+        result = start_processing(db_session, batch.id, upload_dir)
+
+        assert result.status == ProcessingStatus.PROCESSING
+        assert result.error_message is None
+        anomaly_rows = db_session.scalars(select(AnomalyResult).where(AnomalyResult.batch_id == batch.id)).all()
+        assert anomaly_rows == []
+        supervised_rows = db_session.scalars(
+            select(DetectionResult).where(DetectionResult.batch_id == batch.id)
+        ).all()
+        assert len(supervised_rows) == 2
+        assert all(r.model_id == supervised.model_id for r in supervised_rows)
+
+    def test_duplicate_anomaly_persistence_attempt_does_not_fail_the_batch(
+        self, db_session, upload_dir, tmp_path
+    ):
+        # Re-processing wouldn't normally happen for the same batch (a
+        # batch is claimed once), but this proves the UniqueConstraint
+        # itself is non-fatal if a retried persistence call ever hit it:
+        # _run_anomaly_detection's try/except treats any exception,
+        # including AnomalyResultPersistenceError, as best-effort.
+        register_ready_supervised_model(db_session, tmp_path)
+        anomaly = register_ready_anomaly_model(db_session, tmp_path)
+        batch = with_uploaded_file(upload_dir, add_batch(db_session), NSL_KDD_CSV)
+
+        from app.models.anomaly_result import AnomalyResult as AnomalyResultModel
+
+        db_session.add(
+            AnomalyResultModel(batch_id=batch.id, model_id=anomaly.model_id, row_number=1, is_anomaly=False, anomaly_score=0.1)
+        )
+        db_session.commit()
+
+        result = start_processing(db_session, batch.id, upload_dir)
+
+        assert result.status == ProcessingStatus.PROCESSING
+        assert result.error_message is None
 
 
 class TestModelTypeSelectionIsolation:

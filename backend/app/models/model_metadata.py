@@ -91,3 +91,11 @@ class ModelMetadata(Base):
         # No cascade delete: a model version being retired must not
         # silently delete the detection history it produced.
     )
+
+    anomaly_results: Mapped[list["AnomalyResult"]] = relationship(
+        "AnomalyResult",
+        back_populates="model",
+        # Separate relationship from `results` above: AnomalyResult is a
+        # distinct table from DetectionResult. No cascade delete, same
+        # rationale as `results`.
+    )

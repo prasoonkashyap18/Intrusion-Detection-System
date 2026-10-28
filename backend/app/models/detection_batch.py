@@ -66,3 +66,12 @@ class DetectionBatch(Base):
         # feature history must not disappear silently if a batch row is
         # removed.
     )
+
+    anomaly_results: Mapped[list["AnomalyResult"]] = relationship(
+        "AnomalyResult",
+        back_populates="batch",
+        # Separate relationship from `results` above: AnomalyResult is a
+        # distinct table from DetectionResult (see that model's
+        # docstring), so it needs its own back_populates pairing. No
+        # cascade delete, consistent with `results`/`mapped_feature_records`.
+    )

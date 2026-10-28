@@ -88,22 +88,27 @@ is still only logged beyond that — nothing about *risk, severity,
 confidence scoring, alerting*, or any detection-workflow concept is added
 by writing these rows.
 
-Anomaly-detection boundary (new in this step): `_run_anomaly_detection`,
-called from `start_processing` right after the supervised inference
-block, is a second, entirely independent analysis pass using the same
-batch-isolated feature vectors but a completely separate `IsolationForest`
-model family (`app.services.anomaly_detection_training`/`app.services.
-anomaly_inference`, `model_type="isolation_forest"` in the same
-`ModelMetadata` registry table — never confused with the supervised
-`"random_forest"` rows; see `SUPERVISED_MODEL_TYPE`/`ANOMALY_MODEL_TYPE`
-below). Unlike supervised inference, this pass is deliberately
-best-effort and never fails the batch: no compatible `READY` anomaly
-detector, or any failure during anomaly detection itself, is caught,
-logged, and skipped, so a batch that would have succeeded before Step 31
-existed keeps succeeding identically. Its result (when produced) is
-logged only — like Step 26's supervised `InferenceResult` before Step 27
-added persistence, nothing from anomaly detection is written to the
-database or exposed through any API in this step.
+Anomaly-detection boundary (Step 31, persistence added in Step 32):
+`_run_anomaly_detection`, called from `start_processing` right after the
+supervised inference block, is a second, entirely independent analysis
+pass using the same batch-isolated feature vectors but a completely
+separate `IsolationForest` model family (`app.services.
+anomaly_detection_training`/`app.services.anomaly_inference`,
+`model_type="isolation_forest"` in the same `ModelMetadata` registry
+table — never confused with the supervised `"random_forest"` rows; see
+`SUPERVISED_MODEL_TYPE`/`ANOMALY_MODEL_TYPE` below). Unlike supervised
+inference, this pass is deliberately best-effort and never fails the
+batch: no compatible `READY` anomaly detector, any failure during
+anomaly detection itself, or (new in Step 32) any failure persisting its
+result is caught, logged, and skipped, so a batch that would have
+succeeded before Step 31 existed keeps succeeding identically. As of
+Step 32, a successful result is persisted as one `AnomalyResult` row per
+prediction (`app.services.anomaly_result_persistence.
+persist_anomaly_results`), linked to this batch and the anomaly model
+that produced it — kept in a table separate from `DetectionResult` (see
+`app.models.anomaly_result`'s docstring for why) and never exposed
+through any API or combined with supervised predictions in this step;
+see backend/README.md's explicit Step 32 scope.
 
 Concurrency: the pending -> processing transition is one atomic
 `UPDATE ... WHERE status = 'pending'` statement (`claim_for_processing`
@@ -134,6 +139,7 @@ from app.models.mapped_feature_record import MappedFeatureRecord
 from app.models.model_metadata import ModelMetadata
 from app.services.anomaly_detection_training import MODEL_TYPE as ANOMALY_MODEL_TYPE
 from app.services.anomaly_inference import AnomalyInferenceError, AnomalyInferenceResult, predict_anomalies_with_model
+from app.services.anomaly_result_persistence import AnomalyResultPersistenceError, persist_anomaly_results
 from app.services.batch_service import get_batch
 from app.services.dataset_adapters import select_adapter
 from app.services.detection_result_persistence import DetectionResultPersistenceError, persist_detection_results
@@ -280,20 +286,21 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
             inference_result.sample_count,
         )
 
-    # Step 31: an independent, best-effort analysis layer — never affects
-    # the batch's resulting status, and its result is logged only (see
-    # _run_anomaly_detection's docstring and backend/README.md).
+    # Step 31/32: an independent, best-effort analysis layer — never
+    # affects the batch's resulting status, even when persisting its
+    # result fails (see _run_anomaly_detection's docstring).
     anomaly_result = _run_anomaly_detection(db, batch_id, summary)
     if anomaly_result is not None:
         anomaly_count = sum(1 for p in anomaly_result.predictions if p.is_anomaly)
         logger.info(
-            "Batch %s: anomaly detection completed with model %s v%s — %d sample(s), %d flagged anomalous "
-            "(result is in-memory only and was not persisted)",
+            "Batch %s: anomaly detection completed with model %s v%s — %d sample(s), %d flagged anomalous; "
+            "%d anomaly result(s) persisted",
             batch_id,
             anomaly_result.model_name,
             anomaly_result.model_version,
             anomaly_result.sample_count,
             anomaly_count,
+            anomaly_result.sample_count,
         )
 
     return batch
@@ -449,17 +456,20 @@ def _run_anomaly_detection(db: Session, batch_id: uuid.UUID, summary: Processing
 
     Returns `None` when there is nothing to run anomaly detection on (no
     recognized schema, no persisted features), when no compatible `READY`
-    anomaly detector exists, or when anomaly detection itself raises
-    `AnomalyInferenceError` or any other unexpected exception. The result,
-    when produced, is logged only — never persisted (no `DetectionResult`
-    row, no new table) and never returned through any API; see
-    backend/README.md's explicit Step 31 scope.
+    anomaly detector exists, when anomaly detection itself raises
+    `AnomalyInferenceError` or any other unexpected exception, or (new in
+    Step 32) when persisting its result raises
+    `AnomalyResultPersistenceError` — every one of these is caught here
+    and never propagates to `start_processing`. A successful result is
+    persisted as one `AnomalyResult` row per prediction before being
+    returned; see `app.services.anomaly_result_persistence.
+    persist_anomaly_results` and backend/README.md's Step 32 scope.
     """
     if summary.records_persisted == 0 or summary.dataset_schema is None:
         return None
 
     try:
-        feature_matrix, _row_numbers = _load_feature_matrix_for_batch(db, batch_id)
+        feature_matrix, row_numbers = _load_feature_matrix_for_batch(db, batch_id)
         if not feature_matrix:
             return None
 
@@ -474,15 +484,20 @@ def _run_anomaly_detection(db: Session, batch_id: uuid.UUID, summary: Processing
             )
             return None
 
-        return predict_anomalies_with_model(
+        anomaly_result = predict_anomalies_with_model(
             db,
             model.id,
             feature_matrix,
             feature_schema_version=summary.feature_schema_version,
             dataset_schema=summary.dataset_schema,
         )
+        persist_anomaly_results(db, batch_id, anomaly_result, row_numbers)
+        return anomaly_result
     except AnomalyInferenceError:
         logger.exception("Batch %s: anomaly detection failed; continuing without it", batch_id)
+        return None
+    except AnomalyResultPersistenceError:
+        logger.exception("Batch %s: failed to persist anomaly results; continuing without it", batch_id)
         return None
     except Exception:
         logger.exception("Batch %s: unexpected error during anomaly detection; continuing without it", batch_id)

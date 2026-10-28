@@ -7,5 +7,12 @@ from app.models.detection_batch import DetectionBatch
 from app.models.model_metadata import ModelMetadata
 from app.models.detection_result import DetectionResult
 from app.models.mapped_feature_record import MappedFeatureRecord
+from app.models.anomaly_result import AnomalyResult
 
-__all__ = ["DetectionBatch", "ModelMetadata", "DetectionResult", "MappedFeatureRecord"]
+__all__ = [
+    "DetectionBatch",
+    "ModelMetadata",
+    "DetectionResult",
+    "MappedFeatureRecord",
+    "AnomalyResult",
+]
