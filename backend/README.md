@@ -582,6 +582,18 @@ python -m pytest tests/backend -v
 
 Database, upload and batch-listing tests use an isolated in-memory SQLite database and a temporary upload directory; they never touch the real development database or `backend/data/uploads/`.
 
+## Seeding a Demo Model
+
+There is deliberately no training API endpoint and no dataset bundled with the repo (see "Model Training Foundation" above and `data/README.md`), so after `backend/data/ai_ids.db` is deleted/recreated or `models/*.joblib` is removed, nothing in the running application can produce a prediction until a compatible `READY` model exists again.
+
+```bash
+cd backend
+.venv/Scripts/python.exe scripts/seed_demo_model.py   # Windows
+.venv/bin/python scripts/seed_demo_model.py             # macOS/Linux
+```
+
+This generates a small, **synthetic** NSL-KDD-style CSV (clearly separable benign/attack value ranges — not a real-world intrusion dataset), runs it through the real `claim_for_processing` + feature-extraction/persistence step `app.services.batch_processor.start_processing` itself uses (imported directly, not duplicated), then trains and registers one baseline model through the unchanged `app.services.training_data`/`app.services.model_training` pipeline. It is idempotent: if a compatible `READY` model already exists, it prints that and exits without creating another. The script's own batch stays `processing` (expected — feature persistence succeeds, but no model existed yet to run inference against at that moment); every later upload goes through the real, complete `start_processing` path exactly as before. The printed `validation_metrics` are real numbers from that run's own held-out split on synthetic data — never a production-accuracy claim.
+
 ## Current Limitations
 
 - A model-training foundation exists (`app/services/training_data.py`, `app/services/model_training.py`) that can train, evaluate, persist, and register one baseline `RandomForestClassifier` per dataset family from already-persisted features — but no inference/prediction API, no detection results, and no dashboard logic exists yet. A batch's CSV is read, validated, and feature-extracted into `NormalizedFlowFeatures` during processing, but no model runs against a batch as part of processing — nothing is actually analyzed and no batch reaches `completed` yet.
