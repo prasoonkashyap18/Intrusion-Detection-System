@@ -145,8 +145,8 @@ DetectionBatchesPanel → BatchDetailDialog → useBatchDetail (hook) → getDet
 - **States:** loading, success, not-found (no Retry offered — the id does not exist, so retrying cannot help), and a generic failure with Retry, using the shared state components.
 - **Identity safety:** switching which batch is selected never shows the previous batch's data under the new id — the hook masks stale results while the new request is in flight (`frontend/src/hooks/useBatchDetail.ts`).
 - **Dismissal:** the close button, Escape, or clicking outside all close the dialog (native `closedby="any"`); page scroll is locked while it is open, matching `MobileNavDrawer`'s existing pattern.
-- No detection results exist yet, so the dialog says so honestly rather than inventing a results section.
 - **Starting processing** is offered from this dialog — see below.
+- The batch's own **Detection results** are shown further down the dialog — see "Detection Results" below.
 
 ## Batch Processing
 
@@ -163,6 +163,24 @@ BatchDetailDialog → useBatchProcessing (hook) → startBatchProcessing (servic
 - **Completed or failed:** no "Start Processing" action is shown — the backend does not allow restarting either state yet, so offering the button would be misleading.
 - **On failure** (e.g. a `409` because the batch was already claimed elsewhere), the backend's own message is shown inline next to the button; never raw exception text.
 - This step never shows "Analyzing…", a threat count, a confidence value, a severity, or a risk score — none of that exists yet, and the UI does not pretend otherwise.
+
+## Detection Results
+
+`BatchDetailDialog` shows the batch's own persisted `DetectionResult` rows — real model predictions a backend processing run already produced and saved (see `backend/README.md`'s "DetectionResult API"), never generated or guessed in the browser.
+
+```
+BatchDetailDialog → DetectionResultsSection → useDetectionResults (hook) → getDetectionResults (service) → request() → FastAPI → SQLite
+```
+
+- **Content per row:** the original row number, the prediction (`Benign`/`Attack`, both a `StatusDot` tone and a text label — never color alone), the attack probability as a percentage when the model genuinely reported one (a "No data" marker, never a fabricated number, when it did not), the model's name and version, and the real timestamp the prediction was persisted at. A caption states predictions are "not a guarantee of the underlying traffic's actual behavior."
+- **States:** loading, a genuine empty state ("No detection results yet") when the batch has none at all, a generic failure with Retry, and an inline "may be out of date" notice on a refresh failure that still has a previous page's data to show — the same `LoadingState`/`EmptyState`/`ErrorState` vocabulary used everywhere else.
+- **Pagination** follows `DetectionBatchesPanel`'s exact pattern: `page`/`page_size` against the existing backend endpoint, Previous/Next buttons disabled at the ends and while loading, and a single-page view collapses to a plain count with no controls.
+- **Filtering and search (Step 30)** are client-side, applied to whatever page is currently loaded:
+  - A `Benign`/`Attack`/`All` toggle group filters by `prediction_name`.
+  - A search box matches `row_number`, `model_name`, or `model_version` — only fields that genuinely exist on `DetectionResult`; nothing is searched that the backend doesn't actually return.
+  - **Why this is page-scoped, not batch-wide:** the backend's results endpoint has no filter/search query parameters (see `backend/README.md`) — searching the *entire* batch would mean fetching every page into memory, defeating the point of server-side pagination. Instead, a "Showing N of M results on this page matching the current filter" line makes the scope explicit, and a dedicated "No results on this page match the current filter" message (distinct from the real empty state) appears when a filter excludes everything on the loaded page, suggesting Previous/Next rather than implying the batch has no matches at all.
+  - The pager's own `page`/`total_pages`/`total_items` numbers are always the real, unfiltered backend values — a filter never recalculates or hides them, so switching pages while a filter is active re-applies that filter to the newly loaded page without ever misrepresenting how much data actually exists.
+- **Batch isolation:** `useDetectionResults` resets to page 1 and discards the previous batch's data whenever `batchId` changes, the same stale-data-masking approach `useBatchDetail` already uses — switching batches can never show a flash of the wrong batch's results.
 
 ## UI State Components
 
@@ -194,23 +212,24 @@ npm test
 ```
 src/
 ├── components/
-│   ├── brand/          # Logo mark
-│   ├── navigation/     # Sidebar + navigation config
-│   ├── states/         # Loading / Error / Empty / Offline states
-│   ├── system/         # API status badge, UTC clock
-│   ├── topology/       # NetworkTopology3D, its Canvas engine, preview geometry, TopologyViewport panel
-│   └── ui/             # Design-system primitives (Panel, Button, StatusDot, SectionHeading, EmptyState, NoData)
-├── hooks/              # useApiHealth, useMediaQuery, useSurfaceInteraction, useMagnetic, useNow
-├── layouts/            # AppShell, TopBar, MobileNavDrawer
+│   ├── batch/           # BatchDetailDialog, DetectionResultsSection, batchStatus/predictionStatus presentation maps
+│   ├── brand/           # Logo mark
+│   ├── navigation/      # Sidebar + navigation config
+│   ├── states/          # Loading / Error / Empty / Offline states
+│   ├── system/          # API status badge, UTC clock
+│   ├── topology/        # NetworkTopology3D, its Canvas engine, preview geometry, TopologyViewport panel
+│   └── ui/               # Design-system primitives (Panel, Button, StatusDot, SectionHeading, EmptyState, NoData)
+├── hooks/               # useApiHealth, useBatchDetail, useDetectionBatches, useDetectionResults, useBatchProcessing, useMediaQuery, useSurfaceInteraction, useMagnetic, useNow
+├── layouts/             # AppShell, TopBar, MobileNavDrawer
 ├── pages/
-│   └── command-center/ # Command Center page and its panels
-├── services/           # API client, error type, config, health service, barrel
-├── types/              # Frontend types (API health, severity levels, topology graph)
-├── utils/              # cn, color, formatting, shared pointer tracker
-├── index.css           # Tailwind entry + design tokens
-└── main.tsx            # Application entry
+│   └── command-center/  # Command Center page and its panels
+├── services/            # API client, error type, config, health/detection services, barrel
+├── types/               # Frontend types (API health, detection batches/results, severity levels, topology graph)
+├── utils/               # cn, color, formatting, shared pointer tracker, loadFailure
+├── index.css            # Tailwind entry + design tokens
+└── main.tsx             # Application entry
 
-tests/                  # Vitest suites for the service layer and health hook
+tests/                   # Vitest suites for the service layer, hooks, and components
 ```
 
 `@/` is an alias for `src/`, available in both application and test code.

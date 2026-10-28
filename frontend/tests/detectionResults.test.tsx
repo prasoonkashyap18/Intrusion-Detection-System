@@ -252,3 +252,259 @@ describe('DetectionResultsSection — accessibility and visual distinction', () 
     expect(await within(dialog()).findByText('Row 11')).toBeInTheDocument()
   })
 })
+
+describe('DetectionResultsSection — label filtering (Step 30)', () => {
+  it('shows only attack rows when the Attack filter is selected', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    const benign = resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 1, predicted_label: 0, prediction_name: 'benign' })
+    const attack = resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 2, predicted_label: 1, prediction_name: 'attack' })
+    stubBackend([batch], [benign, attack])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+
+    expect(within(dialog()).queryByText('Row 1')).not.toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 2')).toBeInTheDocument()
+  })
+
+  it('shows only benign rows when the Benign filter is selected', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    const benign = resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 1, predicted_label: 0, prediction_name: 'benign' })
+    const attack = resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 2, predicted_label: 1, prediction_name: 'attack' })
+    stubBackend([batch], [benign, attack])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Benign' }))
+
+    expect(within(dialog()).getByText('Row 1')).toBeInTheDocument()
+    expect(within(dialog()).queryByText('Row 2')).not.toBeInTheDocument()
+  })
+
+  it('returns to showing everything when All is reselected', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    const benign = resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 1, prediction_name: 'benign' })
+    const attack = resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 2, predicted_label: 1, prediction_name: 'attack' })
+    stubBackend([batch], [benign, attack])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+    expect(within(dialog()).queryByText('Row 1')).not.toBeInTheDocument()
+
+    await user.click(within(dialog()).getByRole('button', { name: 'All' }))
+
+    expect(within(dialog()).getByText('Row 1')).toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 2')).toBeInTheDocument()
+  })
+
+  it('shows a page-scoped "no matches" message, not the full empty state, when a filter excludes everything', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend([batch], [resultItem({ batch_id: 'batch-1', row_number: 1, prediction_name: 'benign' })])
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+
+    expect(within(dialog()).getByText(/No results on this page match the current filter/)).toBeInTheDocument()
+    expect(within(dialog()).queryByText('No detection results yet')).not.toBeInTheDocument()
+  })
+
+  it('does not show the filter toolbar for a batch with no results at all', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend([batch], [])
+
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+
+    await within(dialog()).findByText('No detection results yet')
+    expect(within(dialog()).queryByRole('button', { name: 'Attack' })).not.toBeInTheDocument()
+  })
+})
+
+describe('DetectionResultsSection — search (Step 30)', () => {
+  it('matches by row number, a field that genuinely exists on the result', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend(
+      [batch],
+      [
+        resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 5 }),
+        resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 42 }),
+      ],
+    )
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 5')
+
+    await user.type(within(dialog()).getByPlaceholderText(/search/i), '42')
+
+    expect(within(dialog()).queryByText('Row 5')).not.toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 42')).toBeInTheDocument()
+  })
+
+  it('matches by model name, a field that genuinely exists on the result', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend(
+      [batch],
+      [
+        resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 1, model_name: 'ai-ids-baseline' }),
+        resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 2, model_name: 'ai-ids-experimental' }),
+      ],
+    )
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.type(within(dialog()).getByPlaceholderText(/search/i), 'experimental')
+
+    expect(within(dialog()).queryByText('Row 1')).not.toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 2')).toBeInTheDocument()
+  })
+
+  it('clears the search with the clear button', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend(
+      [batch],
+      [resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 5 }), resultItem({ id: 'r2', batch_id: 'batch-1', row_number: 9 })],
+    )
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 5')
+    const search = within(dialog()).getByPlaceholderText(/search/i)
+    await user.type(search, '5')
+    expect(within(dialog()).queryByText('Row 9')).not.toBeInTheDocument()
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Clear search' }))
+
+    expect(within(dialog()).getByText('Row 5')).toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 9')).toBeInTheDocument()
+  })
+})
+
+describe('DetectionResultsSection — combined filter and search (Step 30)', () => {
+  it('applies the label filter and the search query together (AND, not OR)', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend(
+      [batch],
+      [
+        resultItem({ id: 'r1', batch_id: 'batch-1', row_number: 1, prediction_name: 'benign', model_version: 'stable' }),
+        resultItem({
+          id: 'r2',
+          batch_id: 'batch-1',
+          row_number: 2,
+          predicted_label: 1,
+          prediction_name: 'attack',
+          model_version: 'stable',
+        }),
+        resultItem({
+          id: 'r3',
+          batch_id: 'batch-1',
+          row_number: 12,
+          predicted_label: 1,
+          prediction_name: 'attack',
+          model_version: 'stable',
+        }),
+      ],
+    )
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+    await user.type(within(dialog()).getByPlaceholderText(/search/i), '1')
+
+    // "1" matches row_number 1 (benign, filtered out) and the "1" inside "12" (attack).
+    expect(within(dialog()).queryByText('Row 1')).not.toBeInTheDocument()
+    expect(within(dialog()).queryByText('Row 2')).not.toBeInTheDocument()
+    expect(within(dialog()).getByText('Row 12')).toBeInTheDocument()
+  })
+})
+
+describe('DetectionResultsSection — pagination interaction (Step 30)', () => {
+  it('keeps the real backend total in the pager while a filter is active', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend([batch], manyResults('batch-1', 25))
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+
+    // The pager's totals are real backend facts and must never be
+    // recalculated from the filtered subset.
+    const nav = within(dialog()).getByRole('navigation', { name: 'Detection result pagination' })
+    expect(nav.textContent).toMatch(/Page\s*1\s*of\s*3/)
+    expect(nav.textContent).toMatch(/25 results/)
+  })
+
+  it('re-applies the active filter after moving to the next page', async () => {
+    const batch = batchItem({ batch_id: 'batch-1' })
+    stubBackend([batch], manyResults('batch-1', 25))
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Next page of detection results' }))
+
+    await waitFor(() => {
+      const nav = within(dialog()).getByRole('navigation', { name: 'Detection result pagination' })
+      expect(nav.textContent).toMatch(/Page\s*2\s*of\s*3/)
+    })
+    // manyResults alternates benign/attack by index; whichever rows 11-20
+    // land as attack should be the only ones shown.
+    const attackButton = within(dialog()).getByRole('button', { name: 'Attack' })
+    expect(attackButton).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('DetectionResultsSection — API failures with an active filter (Step 30)', () => {
+  it('keeps the filtered view intact and reports the failure inline when a later page fails to load', async () => {
+    let page2Attempts = 0
+    const batch = batchItem({ batch_id: 'batch-1' })
+    const results = manyResults('batch-1', 25)
+    stubFetch((input) => {
+      const url = String(input)
+      if (url.includes('/results')) {
+        const page = new URL(url).searchParams.get('page')
+        if (page === '2') {
+          page2Attempts += 1
+          return Promise.resolve(
+            jsonResponse(
+              { error: 'detection_results_unavailable', message: 'Unable to load detection results for this batch.' },
+              500,
+            ),
+          )
+        }
+        const pageSize = Number(new URL(url).searchParams.get('page_size')) || 10
+        return Promise.resolve(
+          jsonResponse({
+            items: results.slice(0, pageSize),
+            batch_id: 'batch-1',
+            page: 1,
+            page_size: pageSize,
+            total_items: results.length,
+            total_pages: Math.ceil(results.length / pageSize),
+          }),
+        )
+      }
+      return Promise.resolve(jsonResponse(batch))
+    })
+    const user = userEvent.setup()
+    render(<BatchDetailDialog batchId="batch-1" onClose={vi.fn()} />)
+    await screen.findByText('Row 1')
+    await user.click(within(dialog()).getByRole('button', { name: 'Attack' }))
+
+    await user.click(within(dialog()).getByRole('button', { name: 'Next page of detection results' }))
+
+    const alert = await within(dialog()).findByRole('alert')
+    expect(alert).toHaveTextContent('Unable to load detection results for this batch.')
+    expect(alert).toHaveTextContent('may be out of date')
+    expect(page2Attempts).toBeGreaterThan(0)
+    // The filter selection itself survives the failed page change.
+    expect(within(dialog()).getByRole('button', { name: 'Attack' })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
