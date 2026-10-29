@@ -37,3 +37,9 @@ class CaptureSessionStatus(str, enum.Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     FAILED = "failed"
+
+
+class UserRole(str, enum.Enum):
+    ADMINISTRATOR = "administrator"
+    SECURITY_ANALYST = "security_analyst"
+    READ_ONLY_VIEWER = "read_only_viewer"

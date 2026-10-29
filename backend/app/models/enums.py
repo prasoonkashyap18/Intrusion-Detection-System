@@ -80,6 +80,25 @@ class CaptureSessionStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class UserRole(str, enum.Enum):
+    """The three roles this application defines (Step 46). Centralized
+    enforcement lives in `app.core.security` — this enum only defines
+    the controlled value set, never a place to check permissions."""
+
+    ADMINISTRATOR = "administrator"
+    """Manages users, assigns roles, configures authorized settings,
+    and has every permission a Security Analyst has."""
+
+    SECURITY_ANALYST = "security_analyst"
+    """Accesses the SOC dashboard, detections, alerts, investigation
+    details, and monitoring controls (CSV/PCAP upload and processing,
+    starting/stopping live capture, updating alert status)."""
+
+    READ_ONLY_VIEWER = "read_only_viewer"
+    """Views detections, alerts, dashboard metrics, and monitoring
+    status — never creates, modifies, or triggers anything."""
+
+
 class ModelStatus(str, enum.Enum):
     """A `ModelMetadata` row is only ever created *after* its artifact has
     been written successfully (see app.services.model_training), so

@@ -30,11 +30,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiException
+from app.core.security import authenticate_token, get_current_user, require_role
 from app.db.database import get_db
 from app.models.alert import Alert
 from app.models.alert_status_history import AlertStatusHistory
 from app.models.enums import AlertStatus as ModelAlertStatus
 from app.models.enums import Severity as ModelSeverity
+from app.models.enums import UserRole
+from app.models.user import User
 from app.schemas.alert import (
     AlertListResponse,
     AlertResponse,
@@ -96,6 +99,7 @@ def get_alerts(
     sort_by: str = Query(default="created_at", description="One of: created_at, updated_at, severity."),
     descending: bool = Query(default=True, description="Sort order; true (default) is newest/highest first."),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ) -> AlertListResponse:
     result = list_alerts(
         db,
@@ -126,12 +130,18 @@ def get_alerts(
         "the source of truth and never the only way to learn about an alert; a disconnected or "
         "newly connecting client always recovers via `GET /alerts?created_after=...`. Sends a "
         "`: heartbeat` comment periodically to keep the connection alive and let a client detect "
-        "a stalled connection. This endpoint implements no authentication or authorization beyond "
-        "whatever the rest of this API already has (none, at this step) — it does not invent a "
-        "guarantee this application does not otherwise provide."
+        "a stalled connection. Requires authentication like every other endpoint, but — because "
+        "browsers' `EventSource` cannot set custom request headers — accepts the session token "
+        "as a `token` query parameter instead of an `Authorization` header; this is the one "
+        "endpoint in this API where that exception applies."
     ),
+    responses={401: {"model": ErrorResponse, "description": "Not authenticated"}},
 )
-async def stream_alerts(request: Request) -> StreamingResponse:
+async def stream_alerts(
+    request: Request, token: str = Query(...), db: Session = Depends(get_db)
+) -> StreamingResponse:
+    authenticate_token(db, token)
+
     subscriber_id, inbox = broker.subscribe()
 
     async def _event_source():
@@ -180,7 +190,9 @@ async def stream_alerts(request: Request) -> StreamingResponse:
         500: {"model": ErrorResponse, "description": "The alert could not be loaded"},
     },
 )
-def get_alert_detail(alert_id: uuid.UUID, db: Session = Depends(get_db)) -> AlertResponse:
+def get_alert_detail(
+    alert_id: uuid.UUID, db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> AlertResponse:
     return _to_response(get_alert_or_404(db, alert_id))
 
 
@@ -195,7 +207,9 @@ def get_alert_detail(alert_id: uuid.UUID, db: Session = Depends(get_db)) -> Aler
         500: {"model": ErrorResponse, "description": "The history could not be loaded"},
     },
 )
-def get_alert_history(alert_id: uuid.UUID, db: Session = Depends(get_db)) -> AlertStatusHistoryResponse:
+def get_alert_history(
+    alert_id: uuid.UUID, db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> AlertStatusHistoryResponse:
     rows = list_status_history(db, alert_id)
     return _to_history_response(alert_id, rows)
 
@@ -222,7 +236,9 @@ def update_alert_status(
     alert_id: uuid.UUID,
     body: AlertStatusUpdateRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> AlertResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     try:
         alert = transition_alert(db, alert_id, ModelAlertStatus(body.status.value), note=body.note)
     except InvalidAlertTransitionError as error:

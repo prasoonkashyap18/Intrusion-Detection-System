@@ -10,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.errors import ApiException
+from app.core.security import get_current_user, require_role
 from app.db.database import get_db
 from app.models.detection_batch import DetectionBatch
 from app.models.detection_result import DetectionResult
-from app.models.enums import ProcessingStatus
+from app.models.enums import ProcessingStatus, UserRole
+from app.models.user import User
 from app.schemas.batch import (
     BatchProcessingResponse,
     DetectionBatchListResponse,
@@ -97,7 +99,9 @@ def upload_detection_csv(
     file: UploadFile | None = File(default=None, description="The CSV file (multipart field `file`)."),
     db: Session = Depends(get_db),
     config: UploadConfig = Depends(get_upload_config),
+    current_user: User = Depends(get_current_user),
 ) -> UploadBatchResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     if file is None:
         raise ApiException(400, "missing_file", "No file was uploaded. Send a CSV in the `file` form field.")
 
@@ -143,7 +147,9 @@ def upload_detection_pcap(
     file: UploadFile | None = File(default=None, description="The capture file (multipart field `file`)."),
     db: Session = Depends(get_db),
     config: PcapUploadConfig = Depends(get_pcap_upload_config),
+    current_user: User = Depends(get_current_user),
 ) -> UploadBatchResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     if file is None:
         raise ApiException(400, "missing_file", "No file was uploaded. Send a capture in the `file` form field.")
 
@@ -186,6 +192,7 @@ def get_detection_batches(
     page: int = Query(default=1, ge=1, le=1_000_000, description="1-based page number."),
     page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE, description="Batches per page."),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ) -> DetectionBatchListResponse:
     result = list_batches(db, page=page, page_size=page_size)
     return DetectionBatchListResponse(
@@ -214,6 +221,7 @@ def get_detection_batches(
 def get_detection_batch(
     batch_id: uuid.UUID,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ) -> DetectionBatchSummary:
     return _summarize(get_batch(db, batch_id))
 
@@ -248,7 +256,9 @@ def start_detection_batch_processing(
     batch_id: uuid.UUID,
     db: Session = Depends(get_db),
     config: UploadConfig = Depends(get_upload_config),
+    current_user: User = Depends(get_current_user),
 ) -> BatchProcessingResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     batch = process_batch(db, batch_id, config.directory)
     return BatchProcessingResponse(
         batch_id=batch.id,
@@ -280,6 +290,7 @@ def get_batch_detection_results(
     page: int = Query(default=1, ge=1, le=1_000_000, description="1-based page number."),
     page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE, description="Results per page."),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ) -> DetectionResultListResponse:
     get_batch(db, batch_id)  # 404 if the batch itself does not exist
     result = list_detection_results_for_batch(db, batch_id, page=page, page_size=page_size)
@@ -307,5 +318,6 @@ def get_batch_detection_results(
 def get_detection_result_by_id(
     result_id: uuid.UUID,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ) -> DetectionResultResponse:
     return _to_detection_result_response(get_detection_result(db, result_id))

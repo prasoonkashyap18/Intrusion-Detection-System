@@ -12,7 +12,10 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.security import get_current_user, require_role
 from app.db.database import get_db
+from app.models.enums import UserRole
+from app.models.user import User
 from app.schemas.capture import (
     CaptureSessionListResponse,
     CaptureSessionResponse,
@@ -43,7 +46,7 @@ def _to_response(session) -> CaptureSessionResponse:
     ),
     responses={503: {"model": ErrorResponse, "description": "The capture backend is unavailable on this host"}},
 )
-def get_capture_interfaces() -> InterfaceListResponse:
+def get_capture_interfaces(_current_user: User = Depends(get_current_user)) -> InterfaceListResponse:
     return InterfaceListResponse(interfaces=live_capture.list_interfaces())
 
 
@@ -67,7 +70,9 @@ def get_capture_interfaces() -> InterfaceListResponse:
 def start_capture_session(
     body: StartCaptureRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CaptureSessionResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     # The capture/worker threads open their own sessions (SQLAlchemy
     # sessions are never shared across threads); binding this factory
     # to the *request's own* engine — rather than defaulting to the
@@ -100,7 +105,9 @@ def start_capture_session(
     summary="List capture sessions, most recently started first",
     description="Returns every capture session this server knows about, running or finished.",
 )
-def get_capture_sessions(db: Session = Depends(get_db)) -> CaptureSessionListResponse:
+def get_capture_sessions(
+    db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> CaptureSessionListResponse:
     return CaptureSessionListResponse(items=[_to_response(s) for s in live_capture.list_sessions(db)])
 
 
@@ -110,7 +117,9 @@ def get_capture_sessions(db: Session = Depends(get_db)) -> CaptureSessionListRes
     summary="Retrieve one capture session's current status and statistics",
     responses={404: {"model": ErrorResponse, "description": "No session exists with that ID"}},
 )
-def get_capture_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> CaptureSessionResponse:
+def get_capture_session(
+    session_id: uuid.UUID, db: Session = Depends(get_db), _current_user: User = Depends(get_current_user)
+) -> CaptureSessionResponse:
     return _to_response(live_capture.get_status(db, session_id))
 
 
@@ -127,5 +136,8 @@ def get_capture_session(session_id: uuid.UUID, db: Session = Depends(get_db)) ->
         409: {"model": ErrorResponse, "description": "The session is not running"},
     },
 )
-def stop_capture_session(session_id: uuid.UUID, db: Session = Depends(get_db)) -> CaptureSessionResponse:
+def stop_capture_session(
+    session_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)
+) -> CaptureSessionResponse:
+    require_role(current_user, UserRole.ADMINISTRATOR, UserRole.SECURITY_ANALYST)
     return _to_response(live_capture.stop_capture(db, session_id))

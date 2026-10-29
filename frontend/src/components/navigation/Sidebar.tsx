@@ -1,8 +1,10 @@
-import { X } from 'lucide-react'
+import { LogOut, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../../contexts/authContextBase'
 import { cn } from '../../utils/cn'
 import { LogoMark } from '../brand/LogoMark'
 import { Button } from '../ui/Button'
-import { NAV_SECTIONS, type NavItem, type NavItemId } from './navigation'
+import { ADMIN_NAV_ITEM, NAV_SECTIONS, type NavItem, type NavItemId, type NavSection } from './navigation'
 
 interface SidebarProps {
   activeId: NavItemId
@@ -13,6 +15,11 @@ interface SidebarProps {
 
 export function Sidebar({ activeId, variant, onClose }: SidebarProps) {
   const rail = variant === 'docked'
+  const { user, hasRole, logout } = useAuth()
+
+  const sections: NavSection[] = hasRole('administrator')
+    ? [...NAV_SECTIONS, { id: 'administration', label: 'Administration', items: [ADMIN_NAV_ITEM] }]
+    : NAV_SECTIONS
 
   return (
     <div className="flex h-full flex-col px-4 pt-6 pb-5 lg:px-5">
@@ -32,7 +39,7 @@ export function Sidebar({ activeId, variant, onClose }: SidebarProps) {
       </div>
 
       <nav aria-label="Primary" className="mt-10 flex-1">
-        {NAV_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const headingId = `nav-${variant}-${section.id}`
           const sectionPlanned = section.items.every((item) => !item.href)
           return (
@@ -64,6 +71,18 @@ export function Sidebar({ activeId, variant, onClose }: SidebarProps) {
           )
         })}
       </nav>
+
+      {user && (
+        <div className={cn('mb-2 flex items-center justify-between gap-2 border-t border-graphite-900/6 px-3 pt-4', rail && 'md:max-lg:flex-col md:max-lg:gap-1')}>
+          <span className={cn('min-w-0', rail && 'md:max-lg:hidden')}>
+            <span className="block truncate text-xs font-medium text-graphite-800">{user.username}</span>
+            <span className="block text-[11px] text-graphite-500 capitalize">{user.role.replace(/_/g, ' ')}</span>
+          </span>
+          <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
+            <LogOut className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
+      )}
 
       <div className={cn('border-t border-graphite-900/6 px-3 pt-4', rail && 'md:max-lg:hidden')}>
         <p className="flex items-center justify-between text-xs text-graphite-500">
@@ -106,8 +125,8 @@ function NavEntry({ item, active, rail, showPlannedBadge }: NavEntryProps) {
   }
 
   return (
-    <a
-      href={item.href}
+    <Link
+      to={item.href}
       aria-current={active ? 'page' : undefined}
       className={cn(
         layout,
@@ -130,7 +149,7 @@ function NavEntry({ item, active, rail, showPlannedBadge }: NavEntryProps) {
       />
       <span className={cn('truncate', labelClass)}>{item.label}</span>
       {rail && <RailTooltip label={item.label} />}
-    </a>
+    </Link>
   )
 }
 

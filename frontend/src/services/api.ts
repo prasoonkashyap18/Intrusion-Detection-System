@@ -1,4 +1,5 @@
 import { ApiError } from './apiError'
+import { getAuthToken, notifyUnauthorized } from './authToken'
 import { API_BASE_URL, DEFAULT_TIMEOUT_MS } from './config'
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -61,11 +62,13 @@ export async function request<T>(path: string, options: RequestOptions<T>): Prom
   const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
 
   const sendsJson = body !== undefined && !isBodyInit(body)
+  const token = getAuthToken()
   const requestInit: RequestInit = {
     method,
     headers: {
       Accept: 'application/json',
       ...(sendsJson ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
     signal: requestSignal,
@@ -88,9 +91,24 @@ export async function request<T>(path: string, options: RequestOptions<T>): Prom
   }
 
   if (!response.ok) {
-    throw new ApiError('http_error', `Request failed with status ${response.status}`, response.status, {
-      detail: await readErrorDetail(response),
-    })
+    const detail = await readErrorDetail(response)
+    // A 401 means this session's token is missing, expired, or revoked —
+    // surface it to AuthProvider so the app returns to a logged-out state
+    // (and the login screen) rather than every caller having to notice
+    // this status individually.
+    if (response.status === 401) notifyUnauthorized()
+    throw new ApiError('http_error', `Request failed with status ${response.status}`, response.status, { detail })
+  }
+
+  if (response.status === 204) {
+    // No body to parse (e.g. POST /auth/logout) -- validated the same
+    // way any other response is, so a validator expecting `undefined`
+    // (see isVoid below) still gets the shape check this function
+    // otherwise always applies.
+    if (!validate(undefined)) {
+      throw new ApiError('invalid_response', 'Response did not match the expected shape', response.status)
+    }
+    return undefined as T
   }
 
   let payload: unknown
@@ -104,6 +122,11 @@ export async function request<T>(path: string, options: RequestOptions<T>): Prom
     throw new ApiError('invalid_response', 'Response did not match the expected shape', response.status)
   }
   return payload
+}
+
+/** Validator for an endpoint that returns no body (e.g. a 204). */
+export function isVoid(value: unknown): value is undefined {
+  return value === undefined
 }
 
 /** Convenience wrapper for the common case. Other verbs go through `request`. */

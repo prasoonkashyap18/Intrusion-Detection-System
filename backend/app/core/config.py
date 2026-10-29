@@ -54,5 +54,12 @@ class Settings:
     threat_intel_max_retries: int = int(os.getenv("THREAT_INTEL_MAX_RETRIES", "1"))
     threat_intel_cache_ttl_seconds: float = float(os.getenv("THREAT_INTEL_CACHE_TTL_SECONDS", "3600"))
 
+    # Authentication (Step 46). Session tokens are opaque, server-issued
+    # random values (app.services.session_service) — never JWTs — so
+    # there is no signing secret to configure here; only the session's
+    # lifetime is. See backend/README.md's "Authentication and
+    # Authorization" section.
+    session_ttl_minutes: int = int(os.getenv("SESSION_TTL_MINUTES", "60"))
+
 
 settings = Settings()

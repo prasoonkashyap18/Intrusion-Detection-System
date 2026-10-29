@@ -1,6 +1,13 @@
-import { ChartColumn, FileUp, Gauge, LayoutDashboard, ListChecks, type LucideIcon } from 'lucide-react'
+import { ChartColumn, FileUp, Gauge, LayoutDashboard, ListChecks, ShieldAlert, Users, type LucideIcon } from 'lucide-react'
 
-export type NavItemId = 'command-center' | 'ingest' | 'detections' | 'analytics' | 'model-performance'
+export type NavItemId =
+  | 'command-center'
+  | 'soc-dashboard'
+  | 'ingest'
+  | 'detections'
+  | 'analytics'
+  | 'model-performance'
+  | 'admin-users'
 
 export interface NavItem {
   id: NavItemId
@@ -20,7 +27,10 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: 'operations',
     label: 'Operations',
-    items: [{ id: 'command-center', label: 'Command Center', icon: LayoutDashboard, href: '/' }],
+    items: [
+      { id: 'command-center', label: 'Command Center', icon: LayoutDashboard, href: '/' },
+      { id: 'soc-dashboard', label: 'SOC Dashboard', icon: ShieldAlert, href: '/dashboard' },
+    ],
   },
   {
     id: 'detection',
@@ -39,6 +49,11 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
 ]
+
+/** Shown only to an authenticated Administrator — see Sidebar.tsx,
+ * which filters this in based on the current user's role rather than
+ * this module (which has no access to auth state) deciding anything. */
+export const ADMIN_NAV_ITEM: NavItem = { id: 'admin-users', label: 'User Management', icon: Users, href: '/admin/users' }
 
 export function findNavLocation(id: NavItemId): { section: NavSection; item: NavItem } | null {
   for (const section of NAV_SECTIONS) {

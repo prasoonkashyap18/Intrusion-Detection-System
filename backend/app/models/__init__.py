@@ -18,6 +18,8 @@ from app.models.attack_chain import AttackChain, AttackChainEvent
 from app.models.threat_intel_lookup import ThreatIntelLookup
 from app.models.pcap_capture_metadata import PcapCaptureMetadata
 from app.models.capture_session import CaptureSession
+from app.models.user import User
+from app.models.user_session import UserSession
 
 __all__ = [
     "DetectionBatch",
@@ -36,4 +38,6 @@ __all__ = [
     "ThreatIntelLookup",
     "PcapCaptureMetadata",
     "CaptureSession",
+    "User",
+    "UserSession",
 ]
