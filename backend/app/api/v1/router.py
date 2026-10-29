@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import alerts, detection, health
+from app.api.v1 import alerts, capture, detection, health
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["Health"])
 api_router.include_router(detection.router, tags=["Detection"])
 api_router.include_router(alerts.router, tags=["Alerts"])
+api_router.include_router(capture.router, tags=["Capture"])

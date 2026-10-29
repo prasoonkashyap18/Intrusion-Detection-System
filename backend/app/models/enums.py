@@ -70,6 +70,16 @@ class ChainClassification(str, enum.Enum):
     an observed grouping, not evidence of a real relationship."""
 
 
+class CaptureSessionStatus(str, enum.Enum):
+    """Lifecycle state of a `CaptureSession` (Step 42). Centralized
+    transition handling lives in `app.services.live_capture`, mirroring
+    `AlertStatus`'s own convention."""
+
+    RUNNING = "running"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
 class ModelStatus(str, enum.Enum):
     """A `ModelMetadata` row is only ever created *after* its artifact has
     been written successfully (see app.services.model_training), so

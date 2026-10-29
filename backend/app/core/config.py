@@ -37,6 +37,11 @@ class Settings:
     # models/README.md) — not a new, separate location.
     model_artifact_dir: str = os.getenv("MODEL_ARTIFACT_DIR", "../models")
 
+    # PCAP ingestion (Step 41) — the idle-timeout that determines when a
+    # packet-derived flow is considered finished (see app.services.
+    # flow_construction's module docstring for the full policy).
+    pcap_flow_idle_timeout_seconds: float = float(os.getenv("PCAP_FLOW_IDLE_TIMEOUT_SECONDS", "120"))
+
     # Threat intelligence (Step 40) — disabled by default, and disabled
     # whenever a required value is missing, so ordinary detection/alert
     # generation is completely unaffected unless this is explicitly

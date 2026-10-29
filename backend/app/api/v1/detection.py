@@ -22,9 +22,10 @@ from app.schemas.batch import (
 )
 from app.schemas.common import ErrorResponse
 from app.schemas.detection import DetectionResultListResponse, DetectionResultResponse
-from app.services.batch_processor import start_processing
+from app.services.batch_processor import process_batch
 from app.services.batch_service import get_batch, list_batches
 from app.services.detection_result_service import get_detection_result, list_detection_results_for_batch
+from app.services.pcap_upload_service import PcapUploadConfig, register_pcap_upload
 from app.services.upload_service import UploadConfig, register_upload
 
 router = APIRouter(prefix="/detection")
@@ -63,6 +64,19 @@ def get_upload_config() -> UploadConfig:
     return UploadConfig(directory=Path(settings.upload_dir), max_bytes=settings.max_upload_mb * 1024 * 1024)
 
 
+def get_pcap_upload_config() -> PcapUploadConfig:
+    """Dependency so tests can point PCAP uploads at a temporary directory,
+    limit, and idle timeout — mirrors `get_upload_config`'s own convention.
+    Uses the same `upload_dir`/`max_upload_mb` settings as CSV uploads
+    (one storage location, one size policy) plus the PCAP-specific
+    flow-idle-timeout setting."""
+    return PcapUploadConfig(
+        directory=Path(settings.upload_dir),
+        max_bytes=settings.max_upload_mb * 1024 * 1024,
+        idle_timeout_seconds=settings.pcap_flow_idle_timeout_seconds,
+    )
+
+
 @router.post(
     "/upload",
     response_model=UploadBatchResponse,
@@ -88,6 +102,52 @@ def upload_detection_csv(
         raise ApiException(400, "missing_file", "No file was uploaded. Send a CSV in the `file` form field.")
 
     batch = register_upload(
+        db=db,
+        config=config,
+        source=file.file,
+        filename=file.filename,
+        content_type=file.content_type,
+    )
+    return UploadBatchResponse(
+        batch_id=batch.id,
+        filename=batch.filename,
+        status=batch.status,
+        total_records=batch.total_records,
+        processed_records=batch.processed_records,
+        failed_records=batch.failed_records,
+        created_at=batch.created_at,
+    )
+
+
+@router.post(
+    "/pcap/upload",
+    response_model=UploadBatchResponse,
+    status_code=201,
+    summary="Upload a .pcap/.pcapng capture and register a pending batch (Step 41)",
+    description=(
+        "Validates the capture's real file content (never the filename or client-supplied "
+        "content type), stores it, and creates a DetectionBatch with status `pending`, plus "
+        "its PCAP-specific metadata. No packet is parsed by this endpoint — see "
+        "`POST /batches/{batch_id}/process` for parsing, flow construction, and detection. "
+        "`total_records` is `0` until that call runs, since packet counts are not known until "
+        "the capture is actually parsed."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Missing or empty file"},
+        413: {"model": ErrorResponse, "description": "File exceeds the upload size limit"},
+        415: {"model": ErrorResponse, "description": "Not a recognized PCAP/PCAPNG capture"},
+        500: {"model": ErrorResponse, "description": "The upload could not be registered"},
+    },
+)
+def upload_detection_pcap(
+    file: UploadFile | None = File(default=None, description="The capture file (multipart field `file`)."),
+    db: Session = Depends(get_db),
+    config: PcapUploadConfig = Depends(get_pcap_upload_config),
+) -> UploadBatchResponse:
+    if file is None:
+        raise ApiException(400, "missing_file", "No file was uploaded. Send a capture in the `file` form field.")
+
+    batch = register_pcap_upload(
         db=db,
         config=config,
         source=file.file,
@@ -169,9 +229,10 @@ _PROCESSING_MESSAGES = {
     response_model=BatchProcessingResponse,
     summary="Start processing a pending detection batch",
     description=(
-        "Claims a pending batch and transitions it to `processing`: CSV ingestion, feature "
+        "Claims a pending batch and transitions it to `processing`: ingestion (CSV rows, or — "
+        "Step 41 — packets parsed into flows for a batch created via `/pcap/upload`), feature "
         "persistence, model inference and DetectionResult persistence all run as part of this "
-        "call for a recognized dataset schema with a compatible trained model (see the "
+        "call for a recognized/derivable dataset schema with a compatible trained model (see the "
         "`GET /batches/{batch_id}/results` endpoint for the resulting predictions). The batch "
         "never reaches `completed` here, and processed/failed record counts are left at zero — "
         "those remain detection-outcome counters this pipeline does not populate yet."
@@ -188,7 +249,7 @@ def start_detection_batch_processing(
     db: Session = Depends(get_db),
     config: UploadConfig = Depends(get_upload_config),
 ) -> BatchProcessingResponse:
-    batch = start_processing(db, batch_id, config.directory)
+    batch = process_batch(db, batch_id, config.directory)
     return BatchProcessingResponse(
         batch_id=batch.id,
         status=batch.status,

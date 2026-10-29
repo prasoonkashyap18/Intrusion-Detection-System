@@ -140,6 +140,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -154,7 +155,9 @@ from app.models.detection_batch import DetectionBatch
 from app.models.enums import ModelStatus, ProcessingStatus
 from app.models.mapped_feature_record import MappedFeatureRecord
 from app.models.model_metadata import ModelMetadata
+from app.models.pcap_capture_metadata import PcapCaptureMetadata
 from app.services.alert_generation import build_and_persist_alerts
+from app.services.alert_notifications import notify_new_alerts
 from app.services.anomaly_detection_training import MODEL_TYPE as ANOMALY_MODEL_TYPE
 from app.services.anomaly_inference import AnomalyInferenceError, AnomalyInferenceResult, predict_anomalies_with_model
 from app.services.anomaly_result_persistence import AnomalyResultPersistenceError, persist_anomaly_results
@@ -170,6 +173,7 @@ from app.services.feature_persistence import load_feature_vector, persist_mapped
 from app.services.hybrid_detection import build_and_persist_hybrid_results
 from app.services.ingestion import ingest_batch, read_header
 from app.services.model_inference import InferenceError, InferenceResult, predict_with_model
+from app.services.pcap_ingestion import run_pcap_feature_extraction
 from app.services.risk_scoring import build_and_persist_risk_assessments
 from app.services.threat_intel.enrichment import enrich_alerts
 
@@ -272,8 +276,28 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
     db.refresh(batch)
 
     csv_path = upload_dir / f"{batch_id}.csv"
+    return _run_processing_pipeline(db, batch, batch_id, lambda: _run_feature_extraction(db, batch_id, csv_path))
+
+
+def _run_processing_pipeline(
+    db: Session,
+    batch: DetectionBatch,
+    batch_id: uuid.UUID,
+    run_feature_extraction: Callable[[], ProcessingSummary],
+) -> DetectionBatch:
+    """The processing boundary shared by `start_processing` (CSV) and
+    `start_pcap_processing` (PCAP, Step 41): feature extraction (source-
+    specific — supplied by the caller as `run_feature_extraction`),
+    model inference, and every later best-effort analysis layer
+    (anomaly detection, hybrid detection, risk scoring, explainability,
+    alerting, correlation, chain analysis). Extracted here so neither
+    caller duplicates this sequence — the CSV path's own behavior is
+    completely unchanged by this extraction, only its feature-extraction
+    step is now reached through a passed-in callable instead of being
+    inlined.
+    """
     try:
-        summary = _run_feature_extraction(db, batch_id, csv_path)
+        summary = run_feature_extraction()
         inference_result = _run_model_inference(db, batch_id, summary)
     except ApiException as error:
         db.rollback()  # discard any feature rows staged but not committed
@@ -340,6 +364,119 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
         )
 
     return batch
+
+
+def start_pcap_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> DetectionBatch:
+    """The PCAP-batch counterpart to `start_processing` (Step 41):
+    claims a pending batch the same way, then runs packet parsing +
+    flow construction + feature persistence (`app.services.
+    pcap_ingestion.run_pcap_feature_extraction`) in place of CSV
+    ingestion, before continuing through the exact same, unmodified
+    `_run_processing_pipeline` — model inference, anomaly detection,
+    hybrid detection, risk scoring, explainability, alerting,
+    correlation, and chain analysis all run identically regardless of
+    whether a batch's rows came from a CSV or a capture file; none of
+    those modules know or need to know which.
+
+    Raises `ApiException`: 404 if the batch does not exist, 409 if it
+    is not pending, 404 if the batch has no `PcapCaptureMetadata` row
+    (it is not actually a PCAP batch — see `app.services.
+    batch_processor.process_batch`, the dispatcher that decides which
+    of these two functions to call), 500 on a database failure while
+    claiming it. A batch whose capture cannot be parsed, or that hits
+    an unexpected error, is left `failed` rather than raising — the
+    same convention `start_processing` already established.
+    """
+    batch = get_batch(db, batch_id)
+    pcap_metadata = db.scalars(
+        select(PcapCaptureMetadata).where(PcapCaptureMetadata.batch_id == batch_id)
+    ).first()
+    if pcap_metadata is None:
+        raise ApiException(404, "not_a_pcap_batch", "This batch has no associated PCAP capture metadata.")
+
+    if batch.status != ProcessingStatus.PENDING:
+        raise ApiException(
+            409,
+            "invalid_batch_state",
+            f"Batch is '{batch.status.value}' and cannot be started; only a pending batch can be processed.",
+        )
+
+    try:
+        claimed = claim_for_processing(db, batch_id)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Failed to claim batch %s for processing", batch_id)
+        raise ApiException(500, "processing_unavailable", "Unable to start processing for this batch.") from None
+
+    if not claimed:
+        raise ApiException(409, "invalid_batch_state", "Batch is no longer pending; it may already be processing.")
+
+    db.refresh(batch)
+
+    pcap_path = upload_dir / f"{batch_id}.{pcap_metadata.capture_format}"
+    idle_timeout_seconds = pcap_metadata.idle_timeout_seconds
+    return _run_processing_pipeline(
+        db,
+        batch,
+        batch_id,
+        lambda: _run_pcap_feature_extraction_step(db, batch_id, pcap_path, pcap_metadata.id, idle_timeout_seconds),
+    )
+
+
+def _run_pcap_feature_extraction_step(
+    db: Session, batch_id: uuid.UUID, pcap_path: Path, pcap_metadata_id: uuid.UUID, idle_timeout_seconds: float
+) -> ProcessingSummary:
+    """Parses and persists one PCAP batch's flows (`app.services.
+    pcap_ingestion.run_pcap_feature_extraction`), writes the resulting
+    packet/flow counts onto this batch's `PcapCaptureMetadata` row, and
+    commits both together — mirroring `_run_feature_extraction`'s own
+    "stage, then commit once" transaction boundary for the CSV path.
+    Returns a `ProcessingSummary` so the shared `_run_processing_pipeline`
+    never has to know this row came from a capture rather than a CSV.
+    """
+    pcap_summary = run_pcap_feature_extraction(db, batch_id, pcap_path, idle_timeout_seconds=idle_timeout_seconds)
+
+    pcap_metadata = db.get(PcapCaptureMetadata, pcap_metadata_id)
+    if pcap_metadata is not None:
+        pcap_metadata.packets_read = pcap_summary.packets_read
+        pcap_metadata.packets_parsed = pcap_summary.packets_parsed
+        pcap_metadata.packets_skipped = pcap_summary.packets_skipped
+        pcap_metadata.flows_constructed = pcap_summary.flows_constructed
+
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Failed to persist PCAP-derived flow features for batch %s", batch_id)
+        raise ApiException(
+            500, "pcap_feature_persistence_unavailable", "Unable to persist flow features for this capture."
+        ) from None
+
+    return ProcessingSummary(
+        records_ingested=pcap_summary.packets_read,
+        records_feature_extracted=pcap_summary.packets_parsed,
+        records_persisted=pcap_summary.flows_constructed,
+        feature_schema_version=pcap_summary.feature_schema_version,
+        dataset_schema=pcap_summary.dataset_schema,
+    )
+
+
+def process_batch(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> DetectionBatch:
+    """Dispatches to `start_pcap_processing` or `start_processing`
+    depending on whether `batch_id` has a `PcapCaptureMetadata` row —
+    the only thing distinguishing a PCAP-sourced batch from a CSV-
+    sourced one (see that model's own docstring). The single endpoint
+    `POST /detection/batches/{batch_id}/process` calls this instead of
+    either function directly, so one route handles both kinds of batch
+    transparently; a CSV batch (no such row) is completely unaffected —
+    it still reaches plain `start_processing`, unchanged.
+    """
+    pcap_metadata = db.scalars(
+        select(PcapCaptureMetadata).where(PcapCaptureMetadata.batch_id == batch_id)
+    ).first()
+    if pcap_metadata is not None:
+        return start_pcap_processing(db, batch_id, upload_dir)
+    return start_processing(db, batch_id, upload_dir)
 
 
 def _run_feature_extraction(db: Session, batch_id: uuid.UUID, csv_path: Path) -> ProcessingSummary:
@@ -625,6 +762,10 @@ def _run_alerts_correlation_and_chains(
     alerts = build_and_persist_alerts(db, risk_results, explanation_results)
     if not alerts:
         return
+
+    # Step 44: notify already-connected real-time clients only now that
+    # every alert above is durably committed — never before.
+    notify_new_alerts(alerts)
 
     build_and_persist_correlations_for_batch(db, batch_id)
     build_and_persist_chains_for_batch(db, batch_id)

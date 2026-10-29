@@ -7,3 +7,4 @@ httpx2==2.13.1
 scikit-learn==1.9.1
 numpy==2.5.3
 joblib==1.6.0
+scapy==2.6.1

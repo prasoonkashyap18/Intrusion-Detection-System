@@ -15,6 +15,7 @@ import math
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -48,14 +49,22 @@ def list_alerts(
     status: AlertStatus | None = None,
     severity: Severity | None = None,
     batch_id: uuid.UUID | None = None,
+    created_after: datetime | None = None,
     sort_by: str = "created_at",
     descending: bool = True,
 ) -> AlertPage:
     """Returns one page of persisted `Alert` rows, optionally filtered
-    by `status`/`severity`/`batch_id` (each applied only when supplied
-    — omitting all three returns every alert) and sorted by one of
-    `_SORTABLE_FIELDS`, with ties broken by `id` for a fully
-    deterministic order regardless of the primary sort field.
+    by `status`/`severity`/`batch_id`/`created_after` (each applied
+    only when supplied — omitting all four returns every alert) and
+    sorted by one of `_SORTABLE_FIELDS`, with ties broken by `id` for a
+    fully deterministic order regardless of the primary sort field.
+
+    `created_after` (Step 44) is the missed-alert-recovery filter: a
+    client that was disconnected from the real-time notification
+    stream (`GET /api/v1/alerts/stream`) retrieves everything it might
+    have missed with `created_after=<the last alert it successfully
+    saw>`, strictly greater-than so the same alert is never returned
+    twice across two consecutive recovery calls.
 
     Raises `ApiException` 422 for an unsupported `sort_by` value — the
     same "reject rather than silently fall back" convention the rest of
@@ -73,6 +82,8 @@ def list_alerts(
         conditions.append(Alert.severity == severity)
     if batch_id is not None:
         conditions.append(Alert.batch_id == batch_id)
+    if created_after is not None:
+        conditions.append(Alert.created_at > created_after)
 
     sort_column = _SORTABLE_FIELDS[sort_by]
     order = sort_column.desc() if descending else sort_column.asc()

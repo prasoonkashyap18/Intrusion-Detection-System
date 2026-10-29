@@ -31,3 +31,9 @@ class AlertStatus(str, enum.Enum):
     INVESTIGATING = "investigating"
     RESOLVED = "resolved"
     FALSE_POSITIVE = "false_positive"
+
+
+class CaptureSessionStatus(str, enum.Enum):
+    RUNNING = "running"
+    STOPPED = "stopped"
+    FAILED = "failed"

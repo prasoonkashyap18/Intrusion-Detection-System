@@ -1,20 +1,32 @@
-"""Alert endpoints: listing, detail, status history, and lifecycle
-status updates (Steps 36/37).
+"""Alert endpoints: listing, detail, status history, lifecycle status
+updates (Steps 36/37), and a real-time notification stream (Step 44).
 
 No alert is ever created or deleted through this router — persistence
-happens exclusively during batch processing (`app.services.
-alert_generation`, wired into `app.services.batch_processor`); this
-router only reads existing rows and, for the one `PATCH` endpoint,
-delegates the actual status change to `app.services.alert_lifecycle.
-transition_alert`, the single centralized place that may write
-`Alert.status`.
+happens exclusively during batch/live-flow processing (`app.services.
+alert_generation`, wired into `app.services.batch_processor`/`app.
+services.realtime_detection`); this router only reads existing rows
+and, for the one `PATCH` endpoint, delegates the actual status change
+to `app.services.alert_lifecycle.transition_alert`, the single
+centralized place that may write `Alert.status`.
+
+`GET /alerts/stream` (Server-Sent Events) is best-effort, in-process,
+and never the source of truth — see `app.services.
+alert_notifications`'s module docstring. A client recovers anything it
+missed (a disconnect, a server restart, or simply having not been
+connected yet) with `GET /alerts?created_after=<timestamp>`, never by
+asking the stream to replay anything.
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
+import queue
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiException
@@ -33,9 +45,13 @@ from app.schemas.alert import (
 from app.schemas.common import ErrorResponse
 from app.schemas.enums import AlertStatus, Severity
 from app.services.alert_lifecycle import InvalidAlertTransitionError, list_status_history, transition_alert
+from app.services.alert_notifications import broker
 from app.services.alert_query_service import get_alert_or_404, list_alerts
 
 router = APIRouter(prefix="/alerts")
+
+_SSE_HEARTBEAT_SECONDS = 15.0
+_SSE_POLL_INTERVAL_SECONDS = 0.5
 
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 20
@@ -57,9 +73,11 @@ def _to_history_response(alert_id: uuid.UUID, rows: list[AlertStatusHistory]) ->
     summary="List persisted alerts, newest first by default",
     description=(
         "Returns one page of persisted Alert rows. An empty collection is a normal 200 with "
-        "`items: []`. Alerts are generated during batch processing (see POST "
-        "/detection/batches/{batch_id}/process) using explicit, configurable rules over the "
-        "hybrid/risk/explanation pipeline — not every processed row has one."
+        "`items: []`. Alerts are generated during batch/live-flow processing using explicit, "
+        "configurable rules over the hybrid/risk/explanation pipeline — not every processed row "
+        "has one. `created_after` (Step 44) is the real-time-stream recovery filter: after "
+        "reconnecting to `GET /alerts/stream`, pass the `created_at` of the last alert you saw "
+        "to retrieve anything persisted while you were disconnected."
     ),
     responses={
         422: {"model": ErrorResponse, "description": "Invalid page, page_size, or sort_by"},
@@ -72,6 +90,9 @@ def get_alerts(
     status: AlertStatus | None = Query(default=None, description="Filter by lifecycle status."),
     severity: Severity | None = Query(default=None, description="Filter by severity."),
     batch_id: uuid.UUID | None = Query(default=None, description="Filter by originating batch."),
+    created_after: datetime | None = Query(
+        default=None, description="Only alerts created strictly after this UTC timestamp."
+    ),
     sort_by: str = Query(default="created_at", description="One of: created_at, updated_at, severity."),
     descending: bool = Query(default=True, description="Sort order; true (default) is newest/highest first."),
     db: Session = Depends(get_db),
@@ -83,6 +104,7 @@ def get_alerts(
         status=ModelAlertStatus(status.value) if status is not None else None,
         severity=ModelSeverity(severity.value) if severity is not None else None,
         batch_id=batch_id,
+        created_after=created_after,
         sort_by=sort_by,
         descending=descending,
     )
@@ -92,6 +114,58 @@ def get_alerts(
         page_size=page_size,
         total_items=result.total_items,
         total_pages=result.total_pages,
+    )
+
+
+@router.get(
+    "/stream",
+    summary="Real-time Server-Sent Events stream of newly persisted alerts",
+    description=(
+        "Opens a Server-Sent Events stream: one `data:` event per alert as soon as it is "
+        "persisted, for as long as the client stays connected. Best-effort only — this is not "
+        "the source of truth and never the only way to learn about an alert; a disconnected or "
+        "newly connecting client always recovers via `GET /alerts?created_after=...`. Sends a "
+        "`: heartbeat` comment periodically to keep the connection alive and let a client detect "
+        "a stalled connection. This endpoint implements no authentication or authorization beyond "
+        "whatever the rest of this API already has (none, at this step) — it does not invent a "
+        "guarantee this application does not otherwise provide."
+    ),
+)
+async def stream_alerts(request: Request) -> StreamingResponse:
+    subscriber_id, inbox = broker.subscribe()
+
+    async def _event_source():
+        last_heartbeat = asyncio.get_event_loop().time()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    notification = await asyncio.get_event_loop().run_in_executor(
+                        None, inbox.get, True, _SSE_POLL_INTERVAL_SECONDS
+                    )
+                except queue.Empty:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat >= _SSE_HEARTBEAT_SECONDS:
+                        last_heartbeat = now
+                        yield ": heartbeat\n\n"
+                    continue
+                payload = {
+                    "alert_id": str(notification.alert_id),
+                    "batch_id": str(notification.batch_id),
+                    "severity": notification.severity,
+                    "status": notification.status,
+                    "title": notification.title,
+                    "created_at": notification.created_at.isoformat(),
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+        finally:
+            broker.unsubscribe(subscriber_id)
+
+    return StreamingResponse(
+        _event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

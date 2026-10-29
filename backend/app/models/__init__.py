@@ -16,6 +16,8 @@ from app.models.alert_status_history import AlertStatusHistory
 from app.models.event_correlation import EventCorrelation
 from app.models.attack_chain import AttackChain, AttackChainEvent
 from app.models.threat_intel_lookup import ThreatIntelLookup
+from app.models.pcap_capture_metadata import PcapCaptureMetadata
+from app.models.capture_session import CaptureSession
 
 __all__ = [
     "DetectionBatch",
@@ -32,4 +34,6 @@ __all__ = [
     "AttackChain",
     "AttackChainEvent",
     "ThreatIntelLookup",
+    "PcapCaptureMetadata",
+    "CaptureSession",
 ]
