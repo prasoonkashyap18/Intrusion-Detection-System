@@ -249,16 +249,20 @@ def build_and_persist_explanations(
     db: Session,
     batch_id: uuid.UUID,
     risk_results: Sequence[tuple[HybridOutcomeResult, RiskScoreResult, HybridDetectionResult, object]],
-) -> list[DetectionExplanation]:
+) -> list[tuple[Explanation, DetectionExplanation]]:
     """Orchestration: for each `(HybridOutcomeResult, RiskScoreResult,
     HybridDetectionResult, RiskAssessment)` tuple `app.services.
     risk_scoring.build_and_persist_risk_assessments` produced, loads the
     supervised model's global feature importance at most once per
     distinct model id (never once per row — a model's `feature_
     importances_` is the same for every row it scored), builds a
-    structured `Explanation`, and persists it.
+    structured `Explanation`, and persists it. Returns each in-memory
+    `Explanation` paired with the `DetectionExplanation` row it was
+    persisted as, in the same order, so callers (alert generation) never
+    have to re-parse the persisted JSON back into an `Explanation`.
     """
     feature_importance_cache: dict[uuid.UUID | None, list[FeatureImportanceEntry] | None] = {}
+    explanations: list[Explanation] = []
     built: list[tuple[Explanation, HybridDetectionResult, uuid.UUID]] = []
 
     for outcome_result, risk_result, hybrid_row, risk_assessment in risk_results:
@@ -268,9 +272,11 @@ def build_and_persist_explanations(
                 load_global_feature_importance(db, model_id) if model_id is not None else None
             )
         explanation = build_explanation(outcome_result, risk_result, feature_importance_cache[model_id])
+        explanations.append(explanation)
         built.append((explanation, hybrid_row, risk_assessment.id))
 
-    return persist_explanations(db, batch_id, built)
+    persisted_rows = persist_explanations(db, batch_id, built)
+    return list(zip(explanations, persisted_rows))
 
 
 def persist_explanations(

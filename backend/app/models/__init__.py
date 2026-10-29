@@ -11,6 +11,11 @@ from app.models.anomaly_result import AnomalyResult
 from app.models.hybrid_detection_result import HybridDetectionResult
 from app.models.risk_assessment import RiskAssessment
 from app.models.detection_explanation import DetectionExplanation
+from app.models.alert import Alert
+from app.models.alert_status_history import AlertStatusHistory
+from app.models.event_correlation import EventCorrelation
+from app.models.attack_chain import AttackChain, AttackChainEvent
+from app.models.threat_intel_lookup import ThreatIntelLookup
 
 __all__ = [
     "DetectionBatch",
@@ -21,4 +26,10 @@ __all__ = [
     "HybridDetectionResult",
     "RiskAssessment",
     "DetectionExplanation",
+    "Alert",
+    "AlertStatusHistory",
+    "EventCorrelation",
+    "AttackChain",
+    "AttackChainEvent",
+    "ThreatIntelLookup",
 ]

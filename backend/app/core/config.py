@@ -37,5 +37,17 @@ class Settings:
     # models/README.md) — not a new, separate location.
     model_artifact_dir: str = os.getenv("MODEL_ARTIFACT_DIR", "../models")
 
+    # Threat intelligence (Step 40) — disabled by default, and disabled
+    # whenever a required value is missing, so ordinary detection/alert
+    # generation is completely unaffected unless this is explicitly
+    # configured. See backend/README.md's "Threat Intelligence" section.
+    threat_intel_enabled: bool = os.getenv("THREAT_INTEL_ENABLED", "false").lower() == "true"
+    threat_intel_provider: str = os.getenv("THREAT_INTEL_PROVIDER", "abuseipdb")
+    # Never hard-coded, never committed: read from the environment only.
+    threat_intel_api_key: str | None = os.getenv("THREAT_INTEL_API_KEY") or None
+    threat_intel_timeout_seconds: float = float(os.getenv("THREAT_INTEL_TIMEOUT_SECONDS", "5"))
+    threat_intel_max_retries: int = int(os.getenv("THREAT_INTEL_MAX_RETRIES", "1"))
+    threat_intel_cache_ttl_seconds: float = float(os.getenv("THREAT_INTEL_CACHE_TTL_SECONDS", "3600"))
+
 
 settings = Settings()

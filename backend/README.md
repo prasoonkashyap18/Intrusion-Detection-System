@@ -61,7 +61,7 @@ While the server is running:
 
 ## Configuration
 
-Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`, `DATABASE_URL`, `UPLOAD_DIR`, `MAX_UPLOAD_MB`). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file.
+Configuration is read from environment variables (see [.env.example](../.env.example) at the repository root for the documented, non-secret options: `APP_NAME`, `ENVIRONMENT`, `API_V1_PREFIX`, `DEBUG`, `CORS_ORIGINS`, `DATABASE_URL`, `UPLOAD_DIR`, `MAX_UPLOAD_MB`, and the `THREAT_INTEL_*` variables — see "Threat Intelligence" below for those). The backend runs with sensible local-development defaults even if no environment variables are set. Never commit a real `.env` file, and never put a real `THREAT_INTEL_API_KEY` value in `.env.example`.
 
 ## Database
 
@@ -659,6 +659,135 @@ Step 35 adds a structured, non-fabricated explanation of each row's hybrid outco
 - **Persistence.** `DetectionExplanation` stores `hybrid_result_id`/`risk_assessment_id` (FKs) and the full structured `explanation` as JSON; `UniqueConstraint("batch_id", "row_number")` and a single-transaction commit mirror every other persistence module in this pipeline. One model artifact load per distinct model id per batch (cached), never once per row.
 - **Limitations.** No API endpoint or frontend surface. No per-instance feature attribution. No natural-language generation — every string is one of a small, fixed, reviewed set of templates, never free-text model output.
 
+## Alert Generation
+
+```
+HybridOutcomeResult + RiskScoreResult + Explanation
+    -> should_generate_alert()  (app.services.alert_generation, pure + deterministic)
+    -> build_alert_draft() -> persist_alerts()
+    -> Alert rows
+```
+
+Step 36 adds a deterministic, rule-based decision about whether a row's already-computed hybrid/risk/explanation outcome is surfaced as an `Alert`. **This step does not run any inference, does not compute a new risk score, and does not add lifecycle management beyond the default `open` status (Step 37, below, owns that).**
+
+- **The rule (`AlertGenerationConfig`).** A row alerts when its hybrid outcome is not `CLEAN` *and* its severity is at or above `min_severity` (default `MEDIUM`) — **except** `CONFIRMED_ATTACK`, which always alerts regardless of severity, since two independent detectors agreeing is itself the reason to alert. This is the explicit mechanism behind "avoid generating alerts for every benign record": a `CLEAN` row, or a flagged-but-low-severity row, simply produces no `Alert` row at all — never a suppressed or hidden one. `should_generate_alert` is a pure function of `(outcome, severity, config)`.
+- **Never a new fact.** `Alert.evidence` is built entirely from the already-persisted `Explanation.as_dict()` plus the hybrid outcome's `contributing_signals` — no IP address, attack type, indicator, or timestamp is ever invented; everything in it is read from `DetectionResult`/`AnomalyResult`/`HybridDetectionResult`/`RiskAssessment`/`DetectionExplanation`, each referenced by a nullable FK (`detection_result_id`, `anomaly_result_id`, `hybrid_result_id`, `risk_assessment_id`, `explanation_id`) rather than duplicated. `title`/`description` are built from a small, fixed set of templates filled with those same real values — never free-text model output.
+- **Missing signals handled explicitly.** An alert for a row whose anomaly result (or, in the edge case `app.services.hybrid_detection` already documents, supervised result) was unavailable still has a real, honest `evidence.explanation` that says so (`unavailable_information`) — never a fabricated placeholder standing in for the missing signal.
+- **Deduplication.** `UniqueConstraint("batch_id", "row_number", name="uq_alerts_batch_row")` is the entire strategy: a retried alert-generation attempt for an already-alerted row is rejected at the database level, mirroring every other per-row table in this pipeline (`DetectionResult`, `AnomalyResult`, `HybridDetectionResult`, `RiskAssessment`, `DetectionExplanation`).
+- **Non-fatal batch-processing integration.** `app.services.batch_processor._run_alerts_correlation_and_chains` runs alert generation (and, when it produces at least one alert, event correlation and attack-chain analysis — Steps 38/39, below) inside the same best-effort boundary `_run_hybrid_risk_and_explanations` already established — any failure here is caught, logged, and never affects the batch's status or any previously persisted result.
+- **Limitations.** No alert lifecycle beyond the default `open` status (Step 37). No correlation or chaining is itself part of this step (Steps 38/39). No frontend surface yet.
+
+## Alert Lifecycle
+
+```
+Alert.status (current)
+    -> transition_alert()  (app.services.alert_lifecycle — the ONLY writer of Alert.status)
+    -> AlertStatusHistory row (previous_status, new_status, note, changed_at)
+    -> Alert.status (new) + Alert.updated_at
+```
+
+Step 37 adds a complete, centrally-validated backend lifecycle for persisted alerts. **This step adds no frontend and no authentication/authorization system — only the backend service and its API.**
+
+- **States.** `open` (the only status a freshly generated alert ever has), `acknowledged`, `investigating`, `resolved`, `false_positive` (`app.models.enums.AlertStatus`).
+- **Valid transitions (`app.services.alert_lifecycle.VALID_TRANSITIONS`).**
+
+  | From | May transition to |
+  |---|---|
+  | `open` | `acknowledged`, `investigating`, `resolved`, `false_positive` |
+  | `acknowledged` | `investigating`, `resolved`, `false_positive` |
+  | `investigating` | `acknowledged`, `resolved`, `false_positive` |
+  | `resolved` | *(terminal — no further transition)* |
+  | `false_positive` | *(terminal — no further transition)* |
+
+  A request whose target status equals the alert's current status is an **idempotent no-op** (returns the alert unchanged, writes no new history row) — a retried identical request must not fail the second time just because the first one already succeeded. Any other transition not in the table above (including every transition out of a terminal state) is rejected as `409 invalid_alert_transition`, validated *before* any write, so an invalid request never partially applies.
+- **Centralized, not duplicated.** `transition_alert` is the only place in the codebase that writes `Alert.status`; the API layer (`app.api.v1.alerts`) never sets it directly, and `app.services.event_correlation`/`attack_chain_analysis` are strictly read-only with respect to alerts (see "Event Correlation"/"Attack-Chain Analysis" below) — an attack chain existing has no automatic effect on any alert's status.
+- **Audit trail.** Every real transition writes one `AlertStatusHistory` row (`previous_status`, `new_status`, optional `note`, `changed_at`) in the same transaction as the status change itself; a commit failure rolls back both together, so an alert is never left with a history row that doesn't match its actual status, or vice versa.
+- **Evidence preservation.** Nothing in this step touches `Alert.evidence` or any of its FKs — the original detection evidence and risk assessment are preserved exactly as Step 36 wrote them, regardless of how many times an alert's status changes.
+- **API endpoints** (`app/api/v1/alerts.py`, following the exact pagination/validation/error-response conventions `app/api/v1/detection.py` already established):
+
+  ```
+  GET   /api/v1/alerts                     (paginated; filter by status/severity/batch_id, sort by created_at/updated_at/severity)
+  GET   /api/v1/alerts/{alert_id}
+  GET   /api/v1/alerts/{alert_id}/history
+  PATCH /api/v1/alerts/{alert_id}/status    (body: {"status": "...", "note": "..." (optional)})
+  ```
+
+  No endpoint creates, deletes, or directly sets `Alert.status`/`Alert.evidence` — the `PATCH` endpoint only ever calls `transition_alert`.
+- **Limitations.** No authentication/authorization (not in scope for this step). No bulk status-update endpoint. No frontend.
+
+## Event Correlation
+
+```
+Alert rows (+ their MappedFeatureRecord, for IP evidence)
+    -> load_alert_contexts() -> find_correlations()  (app.services.event_correlation, pure + deterministic)
+    -> persist_correlations()
+    -> EventCorrelation rows (pairwise edges)
+```
+
+Step 38 finds evidence-based relationships between already-persisted `Alert` rows. **This step performs no new detection and writes only new `EventCorrelation` rows — it never alters an `Alert` or any upstream row.**
+
+- **Three documented rules**, each its own `correlation_type`:
+  - `shared_source_ip` / `shared_destination_ip` (**STRONG** evidence): two alerts whose rows' real, persisted `MappedFeatureRecord.features["source_ip_numeric"/"destination_ip_numeric"]["raw_value"]` are equal, non-null strings, within `config.time_window_seconds` (default 300s) of each other's `Alert.created_at`.
+  - `same_batch_proximity` (**WEAK** evidence): two alerts from the same batch whose `row_number`s differ by at most `config.max_row_distance` (default 5) — a heuristic, never claimed as strong evidence, and the only rule that needs no IP data at all (so a dataset with no IP columns, e.g. NSL-KDD-style, still participates in this one).
+- **Never invents a missing attribute.** A row whose dataset/adapter never produced IP evidence (verified in this repository's own NSL-KDD-style adapter, which carries no IP concept) simply cannot match either IP-based rule — `source_ip`/`destination_ip` are `None`, not a guessed or zero-filled value, and `find_correlations` is a pure function anyone can verify never fabricates a match from `None`.
+- **Strong vs. weak, explicitly.** `CorrelationStrength.STRONG`/`WEAK` (`app.models.enums`) is stored on every edge — an exact network-attribute match is never presented as equivalent to a row-proximity heuristic.
+- **Deduplication and idempotency.** `EventCorrelation.first_alert_id` is always the lexicographically smaller UUID (`order_pair`), so `(A, B)` and `(B, A)` are never stored as separate edges; `UniqueConstraint("first_alert_id", "second_alert_id", "correlation_type")` plus an existence check before insert make `build_and_persist_correlations_for_batch` safe to call repeatedly for the same batch.
+- **Cross-batch by design.** Correlation candidates are evaluated against a bounded pool of alerts — every alert in the current batch (for the proximity rule) plus every alert anywhere within the time window (for the IP rules) — so two alerts from different uploads sharing a real IP are still found.
+- **Configurable.** `EventCorrelationConfig(time_window_seconds, max_row_distance)` — one fixed, documented, overridable rule set, not learned or fit to data.
+- **Non-fatal integration.** Runs from `app.services.batch_processor._run_alerts_correlation_and_chains`, inside the same best-effort boundary as alert generation — a correlation failure never fails the batch or removes any already-persisted alert.
+- **Limitations.** No API endpoint or frontend surface yet. Only IP-based and same-batch-proximity rules exist; no behavioral/statistical correlation. Designed as a plain pairwise-edge graph specifically so Step 39 (below) could be built as connected components over it without this step anticipating that.
+
+## Attack-Chain Analysis
+
+```
+Alert + EventCorrelation rows
+    -> find_connected_components()  (app.services.attack_chain_analysis, pure + deterministic)
+    -> classify_chain()
+    -> persist_chains()
+    -> AttackChain + AttackChainEvent rows
+```
+
+Step 39 groups alerts connected by one or more correlation edges into a persisted `AttackChain`. **This step performs no new correlation of its own, assigns no MITRE ATT&CK technique or attack-stage label (nothing in this codebase implements that mapping), and never writes to `Alert.status` — chain analysis is strictly read-only with respect to the alert lifecycle (Step 37 owns that exclusively).**
+
+- **A chain is a connected component**, nothing more: standard union-find over the `EventCorrelation` graph, kept only when it has at least `config.min_chain_size` members (default 2) — a single, uncorrelated alert is left as-is, never wrapped in a one-member "chain".
+- **Classification, not a confirmed-campaign claim.** `ChainClassification.CORROBORATED` (at least one `STRONG` correlation edge connects the chain's members) vs. `HEURISTIC` (every edge is `WEAK`) — reusing the strength Step 38 already computed, never re-derived or upgraded. This is the entire "distinguish observed events from inferred relationships" mechanism: a `HEURISTIC` chain is explicitly labeled as an observed grouping, never presented as a confirmed attack campaign.
+- **Deterministic ordering and deduplication.** Member events are ordered by `(created_at, id)` ascending — a real chronological order, never an assumed causal one. `member_signature` (a SHA-256 hex digest of the sorted member alert ids) is the entire chain-level deduplication strategy: re-analyzing the same underlying evidence always recomputes the same signature, and `AttackChain`'s `UniqueConstraint("member_signature")` rejects a second insert for it — safe to call repeatedly.
+- **Traceable and expandable.** `AttackChainEvent` links each member `Alert` (with its own FKs back to `DetectionResult`/`AnomalyResult`/`HybridDetectionResult`/`RiskAssessment`/`DetectionExplanation`) to its chain and ordinal position; `build_and_persist_chains_for_batch` expands breadth-first across the correlation graph so a chain spanning multiple batches is found and persisted as one chain, never split.
+- **Non-fatal integration.** Runs immediately after event correlation in `_run_alerts_correlation_and_chains`, inside the same best-effort boundary — a chain-analysis failure never fails the batch or affects any alert or correlation already persisted.
+- **Limitations.** No API endpoint or frontend surface yet. No MITRE ATT&CK mapping or attack-stage labeling. No automated response of any kind (no host isolation, no packet blocking) — explicitly out of scope.
+
+## Threat Intelligence
+
+```
+Alert (+ its MappedFeatureRecord, for a supported indicator)
+    -> extract_supported_indicator()  (app.services.threat_intel.enrichment — "ip" only)
+    -> get_cached_lookup() / provider.lookup_ip()  (app.services.threat_intel.base.ThreatIntelProvider)
+    -> upsert_lookup()
+    -> ThreatIntelLookup row
+```
+
+Step 40 adds a modular, provider-independent threat-intelligence integration. **Disabled by default and unconfigured out of the box — this step does NOT claim to be verified against a live provider; see "What is actually configured" below.**
+
+- **No existing provider/config abstraction was found** when this step began (only `app.core.config.Settings`, a plain dataclass) — this step extends that same `Settings` dataclass with the new `THREAT_INTEL_*` variables below rather than introducing a parallel configuration mechanism.
+- **Provider-independent interface.** `app.services.threat_intel.base.ThreatIntelProvider` (a `Protocol` with one method, `lookup_ip`) and `ThreatIntelResult` — the single normalized shape every adapter must return, distinguishing **four** outcomes a caller must never conflate: a confirmed match (`response_received=True, found=True`), a confirmed negative result (`response_received=True, found=False` — a real response reporting nothing, never treated as proof the indicator is safe), an unavailable lookup (`response_received=False`, `unavailable_reason` set — missing credentials, timeout, rate limit, or provider error), and an unsupported indicator (the caller never calls a provider at all).
+- **Supported indicators.** IP addresses only (`"ip"`) — the only indicator type anything in this codebase extracts from persisted data. `extract_supported_indicator` reads the real, persisted `MappedFeatureRecord.features["source_ip_numeric"/"destination_ip_numeric"]["raw_value"]` for the alert's own row (source IP preferred, destination IP as fallback) and returns `None` (never a fabricated indicator) when neither exists.
+- **Provider adapter: AbuseIPDB** (`app.services.threat_intel.abuseipdb_provider.AbuseIPDBProvider`), behind the interface above so another provider can be added later without touching any caller. Uses `httpx2` (this project's available HTTP client — a drop-in, API-compatible build of `httpx`; see `backend/requirements.txt`) with an explicit timeout and at most one retry, on a timeout only — never on a 4xx/5xx response. `reputation` (`"clean"`/`"suspicious"`/`"malicious"`) is this adapter's own documented, fixed bucketing of AbuseIPDB's real `abuseConfidenceScore`; `category` is left `None` since the provider's `/check` endpoint does not return one — never invented.
+- **Environment variables** (read only from the environment — never hard-coded, never committed):
+
+  | Variable | Default | Meaning |
+  |---|---|---|
+  | `THREAT_INTEL_ENABLED` | `false` | Master switch. Everything below is inert while this is `false`. |
+  | `THREAT_INTEL_PROVIDER` | `abuseipdb` | Which adapter to use (`get_default_provider`). |
+  | `THREAT_INTEL_API_KEY` | *(unset)* | Required for the configured provider; its absence makes the provider unavailable, not an error. |
+  | `THREAT_INTEL_TIMEOUT_SECONDS` | `5` | Per-request timeout. |
+  | `THREAT_INTEL_MAX_RETRIES` | `1` | Retries on timeout only. |
+  | `THREAT_INTEL_CACHE_TTL_SECONDS` | `3600` | How long a cached `ThreatIntelLookup` row is served before a fresh lookup is attempted. |
+
+- **Caching.** `ThreatIntelLookup` is keyed by `(provider_name, indicator)` — `UniqueConstraint("provider_name", "indicator")` — and updated in place on a fresh lookup rather than inserted again, so the same IP across many alerts is looked up at most once per TTL window, not once per alert.
+- **Never interrupts detection.** `enrich_alert`/`enrich_alerts` never raise: disabled, missing credentials, an unsupported indicator, a timeout, a rate limit, a malformed response, or an unexpected provider exception all resolve to a logged, cached (or skipped, if persistence itself fails) "unavailable" outcome. `app.services.batch_processor` only calls this layer at all when `settings.threat_intel_enabled` is `True` — the default configuration makes **zero** external network calls during batch processing.
+- **What is actually configured.** Out of the box, `THREAT_INTEL_ENABLED=false` and no API key is set — enrichment is completely inert. Tests use `httpx2.MockTransport` throughout and never touch the real network or require a real API key (see `tests/backend/test_threat_intel.py`). **Nothing in this repository has been run against the live AbuseIPDB API** — enabling this in a real deployment requires setting the environment variables above with a genuine AbuseIPDB account, which has not been done or verified here.
+- **Limitations.** One provider implemented (AbuseIPDB), IP indicators only (no domain/URL/hash lookups — nothing in this codebase extracts those indicator types yet). No API endpoint or frontend surface. No automatic re-enrichment when a cached result expires (a fresh lookup only happens the next time that indicator is enriched).
+
 ## API Schemas
 
 Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — what requests/responses look like at the HTTP boundary — and are kept **independent of the SQLAlchemy ORM models** (`backend/app/models/`). This separation means the API contract and the database schema can evolve independently.
@@ -667,7 +796,7 @@ Pydantic schemas (`backend/app/schemas/`) define the API's data contracts — wh
 - Input validation happens at this API boundary: `confidence` is validated to `0.0–1.0` by the schema itself (not just the database constraint), and `severity`/`status` only accept the same controlled values as the database (`low`/`medium`/`high`/`critical` and `pending`/`processing`/`completed`/`failed`, respectively).
 - Response schemas use Pydantic v2's `from_attributes=True` so they can be built directly from ORM objects without manual field-by-field conversion.
 - `ModelMetadataResponse` intentionally **omits `artifact_path`** — the internal filesystem/storage path for a saved model artifact is not exposed over the public API (see the docstring in `app/schemas/model.py` for the full rationale).
-- No API endpoints exist yet — these schemas are not wired into any route in this step.
+- `AlertResponse` / `AlertListResponse` / `AlertStatusUpdateRequest` / `AlertStatusHistoryResponse` (Step 36/37, `app/schemas/alert.py`) — independent of `app.models.alert.Alert` the same way, with `app.schemas.enums.AlertStatus` kept in sync by convention with `app.models.enums.AlertStatus`.
 
 ## Running Tests
 
@@ -697,11 +826,12 @@ This generates a small, **synthetic** NSL-KDD-style CSV (clearly separable benig
 - Training is invoked only as an internal service call, not from any endpoint or UI; there is no mechanism yet to trigger, schedule, or monitor a training run from outside a direct Python call.
 - Model inference now runs as part of batch processing (`batch_processor._run_model_inference`, Step 26) for a batch whose dataset schema was recognized and whose features were persisted, provided a compatible `READY` model exists, and its predictions are now persisted as `DetectionResult` rows (Step 27) — but there is still no API or frontend exposure for those rows, and no batch reaches `completed` yet: persisting a prediction is not the same as recording a finished detection (no risk/severity/review workflow exists). A batch with a recognized schema but no compatible trained model, or whose detection-result persistence fails, now fails processing (a deliberate Step 26/27 behavior, not a bug) rather than silently skipping inference or its persistence.
 - An unsupervised anomaly detector (`app/services/anomaly_detection_training.py`, `app/services/anomaly_inference.py`, Step 31) now runs as a second, independent analysis pass during batch processing alongside supervised inference — but only when a compatible `READY` `isolation_forest` model has been registered; unlike the supervised classifier, a missing or failing anomaly detector (including a failure persisting its result) never fails the batch (deliberately best-effort, not a requirement). Its predictions (`is_anomaly`, `anomaly_score`) are now persisted as `AnomalyResult` rows (`app/models/anomaly_result.py`, `app/services/anomaly_result_persistence.py`, Step 32), in a table separate from `DetectionResult`.
-- The supervised and anomaly signals are now combined (`app/services/hybrid_detection.py`, Step 33), scored (`app/services/risk_scoring.py`, Step 34), and explained (`app/services/explainability.py`, Step 35) as part of batch processing, persisted as `HybridDetectionResult`/`RiskAssessment`/`DetectionExplanation` rows — one triple per traffic row, each in its own table, none of them altering `DetectionResult`/`AnomalyResult`. This whole three-module layer is best-effort like anomaly detection: it requires supervised inference to have run, but not anomaly detection to have succeeded, and any failure in it is caught and logged without failing the batch or losing already-persisted results. None of it is exposed through any API or the frontend yet, and no alert generation, alert lifecycle, event correlation, attack-chain analysis, or threat intelligence exists — all explicitly out of scope through Step 35.
-- A dataset-adapter layer exists (`app/services/dataset_adapters/`) that can translate NSL-KDD/UNSW-NB15/CICIDS-style CSV schemas into a canonical representation, but it is not called during batch processing — there is no mechanism yet for a batch to declare or select a dataset.
+- The supervised and anomaly signals are now combined (`app/services/hybrid_detection.py`, Step 33), scored (`app/services/risk_scoring.py`, Step 34), and explained (`app/services/explainability.py`, Step 35) as part of batch processing, persisted as `HybridDetectionResult`/`RiskAssessment`/`DetectionExplanation` rows — one triple per traffic row, each in its own table, none of them altering `DetectionResult`/`AnomalyResult`. This whole three-module layer is best-effort like anomaly detection: it requires supervised inference to have run, but not anomaly detection to have succeeded, and any failure in it is caught and logged without failing the batch or losing already-persisted results.
+- Alerts (`app/services/alert_generation.py`, Step 36), their lifecycle (`app/services/alert_lifecycle.py`, Step 37), event correlation (`app/services/event_correlation.py`, Step 38), attack-chain analysis (`app/services/attack_chain_analysis.py`, Step 39), and threat-intelligence enrichment (`app/services/threat_intel/`, Step 40) are now implemented as part of this same best-effort derived-analysis layer, persisted as `Alert`/`AlertStatusHistory`/`EventCorrelation`/`AttackChain`/`AttackChainEvent`/`ThreatIntelLookup` rows — see the dedicated sections above for exactly what each one does and does not do. Alerts have a full API (`GET /api/v1/alerts`, `GET /api/v1/alerts/{alert_id}`, `GET /api/v1/alerts/{alert_id}/history`, `PATCH /api/v1/alerts/{alert_id}/status`); event correlation, attack-chain analysis, and threat intelligence do not have API endpoints yet. Threat-intelligence enrichment is disabled by default (`THREAT_INTEL_ENABLED=false`) and has not been run against a live provider — see "Threat Intelligence" above. No automated response, alert-triggered host isolation, packet blocking, or MITRE ATT&CK/attack-stage mapping exists anywhere in this codebase.
+- A dataset-adapter layer exists (`app/services/dataset_adapters/`) that can translate NSL-KDD/UNSW-NB15/CICIDS-style CSV schemas into a canonical representation; NSL-KDD-style (the only adapter exercised by this repository's tests and seed script) carries no IP-address concept, so `app.services.event_correlation`'s IP-based rules never match on data produced through it — only the IP-independent `same_batch_proximity` rule can (see "Event Correlation" above for why this is a genuine data limitation, not a bug).
 - A dataset-profiling service exists (`app/services/dataset_profiling/`) that can produce a structural/statistical profile of a stored batch's CSV, but it is not called during batch processing or exposed over the API yet — it is a standalone, independently-tested service.
 - A dataset feature-mapping layer exists (`app/services/feature_mapping.py`) that can turn a `CanonicalDatasetRecord` into a deterministic, provenance-carrying `MappedFeatureSet`, but it is not called during batch processing yet — it is a standalone, independently-tested service, same as the adapter and profiling layers above.
 - Only batches created by real uploads exist; nothing inserts sample or fake data.
 - No authentication/authorization exists yet.
 - CORS is configured for local development origins only; it has not been reviewed or hardened for production use.
-- Five public endpoints exist: `GET /api/v1/health`, `POST /api/v1/detection/upload`, `GET /api/v1/detection/batches`, `GET /api/v1/detection/batches/{batch_id}` and `POST /api/v1/detection/batches/{batch_id}/process`.
+- Public endpoints: `GET /api/v1/health`, `POST /api/v1/detection/upload`, `GET /api/v1/detection/batches`, `GET /api/v1/detection/batches/{batch_id}`, `POST /api/v1/detection/batches/{batch_id}/process`, `GET /api/v1/detection/batches/{batch_id}/results`, `GET /api/v1/detection/results/{result_id}`, `GET /api/v1/alerts`, `GET /api/v1/alerts/{alert_id}`, `GET /api/v1/alerts/{alert_id}/history`, `PATCH /api/v1/alerts/{alert_id}/status`.

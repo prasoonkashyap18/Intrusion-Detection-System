@@ -91,3 +91,8 @@ class DetectionBatch(Base):
         "DetectionExplanation",
         back_populates="batch",
     )
+
+    alerts: Mapped[list["Alert"]] = relationship(
+        "Alert",
+        back_populates="batch",
+    )

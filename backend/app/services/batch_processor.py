@@ -148,17 +148,21 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.errors import ApiException
 from app.models.detection_batch import DetectionBatch
 from app.models.enums import ModelStatus, ProcessingStatus
 from app.models.mapped_feature_record import MappedFeatureRecord
 from app.models.model_metadata import ModelMetadata
+from app.services.alert_generation import build_and_persist_alerts
 from app.services.anomaly_detection_training import MODEL_TYPE as ANOMALY_MODEL_TYPE
 from app.services.anomaly_inference import AnomalyInferenceError, AnomalyInferenceResult, predict_anomalies_with_model
 from app.services.anomaly_result_persistence import AnomalyResultPersistenceError, persist_anomaly_results
+from app.services.attack_chain_analysis import build_and_persist_chains_for_batch
 from app.services.batch_service import get_batch
 from app.services.dataset_adapters import select_adapter
 from app.services.detection_result_persistence import DetectionResultPersistenceError, persist_detection_results
+from app.services.event_correlation import build_and_persist_correlations_for_batch
 from app.services.explainability import build_and_persist_explanations
 from app.services.feature_extraction import FEATURE_SCHEMA_VERSION, extract_features
 from app.services.feature_mapping import map_canonical_record
@@ -167,6 +171,7 @@ from app.services.hybrid_detection import build_and_persist_hybrid_results
 from app.services.ingestion import ingest_batch, read_header
 from app.services.model_inference import InferenceError, InferenceResult, predict_with_model
 from app.services.risk_scoring import build_and_persist_risk_assessments
+from app.services.threat_intel.enrichment import enrich_alerts
 
 logger = logging.getLogger("ai_ids")
 
@@ -566,6 +571,11 @@ def _run_hybrid_risk_and_explanations(
     succeeding identically even if this derived layer cannot complete.
     Returns the number of rows processed (0 if none, e.g. no persisted
     detection results existed) so the caller can log it; never raises.
+
+    As of Steps 36-38, a successful run also triggers alert generation
+    (`app.services.alert_generation`) and event correlation
+    (`app.services.event_correlation`) for this batch's rows, inside
+    this same non-fatal boundary — see `_run_alerts_correlation_and_chains`.
     """
     if inference_result is None:
         return 0
@@ -576,13 +586,51 @@ def _run_hybrid_risk_and_explanations(
             return 0
 
         risk_results = build_and_persist_risk_assessments(db, batch_id, hybrid_results)
-        build_and_persist_explanations(db, batch_id, risk_results)
+        explanation_results = build_and_persist_explanations(db, batch_id, risk_results)
+        _run_alerts_correlation_and_chains(db, batch_id, risk_results, explanation_results)
         return len(hybrid_results)
     except Exception:
         logger.exception(
             "Batch %s: hybrid detection/risk scoring/explainability failed; continuing without it", batch_id
         )
         return 0
+
+
+def _run_alerts_correlation_and_chains(
+    db: Session,
+    batch_id: uuid.UUID,
+    risk_results: list,
+    explanation_results: list,
+) -> None:
+    """Runs the Step 36-39 layer — alert generation (`app.services.
+    alert_generation`), event correlation (`app.services.
+    event_correlation`), attack-chain analysis (`app.services.
+    attack_chain_analysis`), and (only when configured —
+    `settings.threat_intel_enabled`) best-effort threat-intelligence
+    enrichment (`app.services.threat_intel`) — for this batch's just-
+    computed hybrid/risk/explanation rows.
+
+    Deliberately best-effort and non-fatal, like every other optional
+    layer in this pipeline: any failure here (an alert-generation,
+    correlation, or chain-analysis persistence error, or any other
+    unexpected exception) is caught, logged, and swallowed by the
+    caller's own `try/except` — this function itself does not catch,
+    so a failure here propagates up to `_run_hybrid_risk_and_explanations`'s
+    existing boundary rather than duplicating it. A threat-intelligence
+    enrichment failure is caught independently, one alert at a time
+    (see `app.services.threat_intel.enrichment.enrich_alerts`), so it
+    can never prevent alert generation, correlation, or chain analysis
+    from completing.
+    """
+    alerts = build_and_persist_alerts(db, risk_results, explanation_results)
+    if not alerts:
+        return
+
+    build_and_persist_correlations_for_batch(db, batch_id)
+    build_and_persist_chains_for_batch(db, batch_id)
+
+    if settings.threat_intel_enabled:
+        enrich_alerts(db, alerts)
 
 
 SUPERVISED_MODEL_TYPE = "random_forest"
