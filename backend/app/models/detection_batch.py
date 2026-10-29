@@ -75,3 +75,19 @@ class DetectionBatch(Base):
         # docstring), so it needs its own back_populates pairing. No
         # cascade delete, consistent with `results`/`mapped_feature_records`.
     )
+
+    hybrid_results: Mapped[list["HybridDetectionResult"]] = relationship(
+        "HybridDetectionResult",
+        back_populates="batch",
+        # Separate relationship, same no-cascade-delete rationale as above.
+    )
+
+    risk_assessments: Mapped[list["RiskAssessment"]] = relationship(
+        "RiskAssessment",
+        back_populates="batch",
+    )
+
+    explanations: Mapped[list["DetectionExplanation"]] = relationship(
+        "DetectionExplanation",
+        back_populates="batch",
+    )

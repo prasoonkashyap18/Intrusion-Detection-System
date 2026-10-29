@@ -110,6 +110,22 @@ that produced it — kept in a table separate from `DetectionResult` (see
 through any API or combined with supervised predictions in this step;
 see backend/README.md's explicit Step 32 scope.
 
+Derived-analysis boundary (Steps 33-35): `_run_hybrid_risk_and_explanations`,
+called from `start_processing` right after the anomaly-detection block, is a
+third analysis pass that reads back whatever `DetectionResult`/
+`AnomalyResult` rows this batch just produced (never re-running inference or
+anomaly detection itself) and combines them into `HybridDetectionResult`
+(`app.services.hybrid_detection`), `RiskAssessment`
+(`app.services.risk_scoring`), and `DetectionExplanation`
+(`app.services.explainability`) rows — one triple per traffic row. Like
+anomaly detection, it is entirely best-effort: it requires supervised
+inference to have run (skipped, not failed, otherwise) but does not require
+an anomaly result to exist for any given row, and any failure anywhere in
+this layer is caught, logged, and swallowed rather than failing the batch.
+These three new tables never alter `DetectionResult` or `AnomalyResult`
+themselves — the original predictions, probabilities, flags, and scores stay
+exactly as Steps 27/32 persisted them.
+
 Concurrency: the pending -> processing transition is one atomic
 `UPDATE ... WHERE status = 'pending'` statement (`claim_for_processing`
 below), committed immediately. Two callers that both observed `pending`
@@ -143,11 +159,14 @@ from app.services.anomaly_result_persistence import AnomalyResultPersistenceErro
 from app.services.batch_service import get_batch
 from app.services.dataset_adapters import select_adapter
 from app.services.detection_result_persistence import DetectionResultPersistenceError, persist_detection_results
+from app.services.explainability import build_and_persist_explanations
 from app.services.feature_extraction import FEATURE_SCHEMA_VERSION, extract_features
 from app.services.feature_mapping import map_canonical_record
 from app.services.feature_persistence import load_feature_vector, persist_mapped_features
+from app.services.hybrid_detection import build_and_persist_hybrid_results
 from app.services.ingestion import ingest_batch, read_header
 from app.services.model_inference import InferenceError, InferenceResult, predict_with_model
+from app.services.risk_scoring import build_and_persist_risk_assessments
 
 logger = logging.getLogger("ai_ids")
 
@@ -301,6 +320,18 @@ def start_processing(db: Session, batch_id: uuid.UUID, upload_dir: Path) -> Dete
             anomaly_result.sample_count,
             anomaly_count,
             anomaly_result.sample_count,
+        )
+
+    # Steps 33-35: hybrid detection, risk scoring, and explainability —
+    # an independent, best-effort derived-analysis layer over whatever
+    # supervised/anomaly results were just persisted. Never affects the
+    # batch's resulting status (see _run_hybrid_risk_and_explanations).
+    hybrid_count = _run_hybrid_risk_and_explanations(db, batch_id, inference_result)
+    if hybrid_count:
+        logger.info(
+            "Batch %s: hybrid detection, risk scoring, and explanations computed for %d row(s)",
+            batch_id,
+            hybrid_count,
         )
 
     return batch
@@ -502,6 +533,56 @@ def _run_anomaly_detection(db: Session, batch_id: uuid.UUID, summary: Processing
     except Exception:
         logger.exception("Batch %s: unexpected error during anomaly detection; continuing without it", batch_id)
         return None
+
+
+def _run_hybrid_risk_and_explanations(
+    db: Session, batch_id: uuid.UUID, inference_result: InferenceResult | None
+) -> int:
+    """Runs the Step 33-35 derived-analysis layer — hybrid detection
+    (`app.services.hybrid_detection`), risk scoring (`app.services.
+    risk_scoring`), and explainability (`app.services.explainability`)
+    — over whatever `DetectionResult`/`AnomalyResult` rows already exist
+    for this batch. Orchestration only: each module owns its own
+    computation and persistence; this function just calls them in
+    sequence and keeps the whole sequence best-effort, exactly like
+    `_run_anomaly_detection`.
+
+    Returns `None` (skips entirely) when `inference_result` is `None` —
+    supervised inference did not run for this batch (dataset not
+    recognized, or no features persisted), so there is nothing to build
+    a hybrid outcome from; this mirrors why `_run_anomaly_detection`
+    itself requires persisted features. Does NOT require anomaly
+    detection to have succeeded — `app.services.hybrid_detection` already
+    handles a missing `AnomalyResult` for a row explicitly (see that
+    module's docstring), so a batch with no compatible anomaly detector
+    still gets hybrid/risk/explanation rows based on the supervised
+    signal alone.
+
+    Deliberately best-effort and non-fatal, like anomaly detection: any
+    failure in this layer (a persistence error from any of the three
+    modules, or any other unexpected exception) is caught, logged, and
+    swallowed — a batch whose supervised inference (and, when
+    applicable, anomaly detection) already succeeded must keep
+    succeeding identically even if this derived layer cannot complete.
+    Returns the number of rows processed (0 if none, e.g. no persisted
+    detection results existed) so the caller can log it; never raises.
+    """
+    if inference_result is None:
+        return 0
+
+    try:
+        hybrid_results = build_and_persist_hybrid_results(db, batch_id)
+        if not hybrid_results:
+            return 0
+
+        risk_results = build_and_persist_risk_assessments(db, batch_id, hybrid_results)
+        build_and_persist_explanations(db, batch_id, risk_results)
+        return len(hybrid_results)
+    except Exception:
+        logger.exception(
+            "Batch %s: hybrid detection/risk scoring/explainability failed; continuing without it", batch_id
+        )
+        return 0
 
 
 SUPERVISED_MODEL_TYPE = "random_forest"
